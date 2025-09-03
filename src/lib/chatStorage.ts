@@ -3,7 +3,7 @@ export type SerializableMessage = {
   text: string;
   sender: 'user' | 'assistant';
   timestamp: string; // ISO string
-  files?: any;
+  files?: unknown;
 };
 
 const NAMESPACE = 'capin:chat';
@@ -33,7 +33,9 @@ export function loadMessages(sessionId: string): SerializableMessage[] | null {
 export function saveSessionId(scope: string, sessionId: string) {
   try {
     localStorage.setItem(storageKeys.session(scope), sessionId);
-  } catch {}
+  } catch {
+    console.warn('No se pudo guardar la sesión en localStorage');
+  }
 }
 
 export function loadSessionId(scope: string): string | null {
@@ -41,5 +43,27 @@ export function loadSessionId(scope: string): string | null {
     return localStorage.getItem(storageKeys.session(scope));
   } catch {
     return null;
+  }
+}
+
+export function clearSession(scope: string) {
+  try {
+    localStorage.removeItem(storageKeys.session(scope));
+  } catch {
+    console.warn('No se pudo eliminar la sesión de localStorage');
+  }
+}
+
+export function clearChat(sessionId: string) {
+  try {
+    const welcomeMsg: SerializableMessage = {
+            id: crypto.randomUUID(),
+            text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
+            sender: "assistant",
+            timestamp: new Date().toISOString(),
+          };
+    saveMessages(sessionId, [welcomeMsg]);
+  } catch (err) {
+    console.warn("No se pudo limpiar el chat:", err);
   }
 }

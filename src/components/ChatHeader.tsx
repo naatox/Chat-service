@@ -4,19 +4,22 @@ import { Badge } from "@/components/ui/badge";
 import { Minimize2, Maximize2, X } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
+import { Trash2 } from "lucide-react";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;
+  userRole?: string;
   onToggleMinimize?: () => void;
   onClose?: () => void;
-  userRole?: string;
+  onClear?: () => void;
 }
 
 export const ChatHeader = ({ 
   isMinimized, 
+  userRole = "",
   onToggleMinimize, 
   onClose,
-  userRole = "" 
+  onClear
 }: ChatHeaderProps) => {
   return (
     <div className="bg-gradient-primary text-white p-4 rounded-t-xl shadow-chat">
@@ -50,6 +53,14 @@ export const ChatHeader = ({
         </div>
 
         <div className="flex items-center gap-1">
+          <button
+          type="button"
+          onClick={onClear}
+          title="Borrar chat"
+          className="p-2 rounded hover:bg-zinc-100"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
           {onToggleMinimize && (
             <Button
               variant="ghost"
