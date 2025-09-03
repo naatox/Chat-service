@@ -27,7 +27,7 @@ interface CapinChatProps {
 
 export const CapinChat = ({
   userRole = "",
-  apiEndpoint = "http://localhost:8000/api/chat",
+  apiEndpoint = "https://rag-service-qgkc.onrender.com/api/chat",
   onError,
   className = "",
   onClose,
