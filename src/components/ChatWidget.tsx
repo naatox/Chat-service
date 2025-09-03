@@ -74,7 +74,7 @@ const ChatWidget = () => {
           <CapinChat
             userRole="tms"
             className="h-full max-w-none w-full"
-            apiEndpoint="http://localhost:8000/api/chat"
+            apiEndpoint="https://rag-service-qgkc.onrender.com/api/chat"
             sessionScope="guest"
             showWelcome={true}
           />
