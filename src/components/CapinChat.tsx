@@ -5,8 +5,8 @@ import { ChatInput } from "./ChatInput";
 import { TypingIndicator } from "./TypingIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { clearChat } from "@/lib/chatStorage";
 
-// nuevo: helpers de storage
 import {
   saveMessages,
   loadMessages,
@@ -27,7 +27,7 @@ interface CapinChatProps {
 
 export const CapinChat = ({
   userRole = "",
-  apiEndpoint = 'https://rag-service-qgkc.onrender.com/api/chat',
+  apiEndpoint = "http://localhost:8000/api/chat",
   onError,
   className = "",
   onClose,
@@ -35,7 +35,6 @@ export const CapinChat = ({
   sessionScope = "guest",
 }: CapinChatProps) => {
 
-  // 1) sessionId persistente en localStorage por "scope"
   const [sessionId, setSessionId] = useState(() => {
     const existing = loadSessionId(sessionScope);
     if (existing) return existing;
@@ -44,7 +43,6 @@ export const CapinChat = ({
     return generated;
   });
 
-  // 2) estado de mensajes (se hidrata en useEffect)
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
 
@@ -59,13 +57,13 @@ export const CapinChat = ({
     scrollToBottom();
   }, [messages, isTyping]);
 
-  // 3) Hidratar mensajes de localStorage al montar (según sessionId)
   useEffect(() => {
     const raw = loadMessages(sessionId);
     if (raw && Array.isArray(raw)) {
       const hydrated: Message[] = raw.map((m: SerializableMessage) => ({
         ...m,
         timestamp: new Date(m.timestamp),
+        files: Array.isArray(m.files) ? m.files as File[] : undefined,
       }));
       setMessages(hydrated);
     } else {
@@ -80,10 +78,8 @@ export const CapinChat = ({
         setMessages([]);
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]); // si cambia sessionId, cargamos su historial
+  }, [sessionId]);
 
-  // 4) Guardar mensajes en localStorage ante cualquier cambio
   useEffect(() => {
     const serializable: SerializableMessage[] = messages.map(m => ({
       ...m,
@@ -96,7 +92,6 @@ export const CapinChat = ({
     saveMessages(sessionId, trimmed);
   }, [messages, sessionId]);
 
-  // -- API call existente --
   const callChatAPI = async (question: string): Promise<string> => {
     const res = await fetch(apiEndpoint, {
       method: "POST",
@@ -116,7 +111,18 @@ export const CapinChat = ({
     return data.answer as string;
   };
 
-  // -- envío de mensaje + persistencia automática por el useEffect de arriba --
+  const handleClearChat = () => {
+    const ok = confirm("¿Borrar toda la conversación?");
+      if (!ok) return;
+      if (sessionId) clearChat(sessionId);
+      setMessages([{
+        id: "welcome",
+        text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
+        sender: "assistant",
+        timestamp: new Date(),
+      }]);
+    };
+
   const handleSendMessage = async (text: string) => {
     if (!text.trim()) return;
 
@@ -172,7 +178,7 @@ export const CapinChat = ({
     <div
       className={`bg-background border shadow-chat rounded-xl overflow-hidden flex flex-col h-[600px] max-w-md w-full ${className}`}
     >
-      <ChatHeader userRole={userRole} onClose={onClose} />
+      <ChatHeader userRole={userRole} onClose={onClose} onClear={handleClearChat} />
 
       <ScrollArea className="flex-1 p-0">
         <div className="space-y-0">
