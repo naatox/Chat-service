@@ -1,12 +1,13 @@
 ### Directory Structure:
 
+├── .env.example
 ├── .gitignore
 ├── README.md
 ├── bun.lockb
 ├── components.json
 ├── contexts/
-│   ├── capin.txt
 │   ├── chat.txt
+│   ├── rag.txt
 ├── eslint.config.js
 ├── index.html
 ├── ingestlocal.py
@@ -24,6 +25,7 @@
 │   │   ├── ChatInput.tsx
 │   │   ├── ChatMessage.tsx
 │   │   ├── ChatWidget.tsx
+│   │   ├── SuggestedQuestions.tsx
 │   │   ├── TypingIndicator.tsx
 │   │   ├── ui/
 │   │   │   ├── accordion.tsx
@@ -75,10 +77,14 @@
 │   │   │   ├── toggle.tsx
 │   │   │   ├── tooltip.tsx
 │   │   │   ├── use-toast.ts
+│   ├── contexts/
+│   │   ├── AuthContext.tsx
 │   ├── hooks/
 │   │   ├── use-mobile.tsx
 │   │   ├── use-toast.ts
 │   ├── index.css
+│   ├── interfaces/
+│   │   ├── User.ts
 │   ├── lib/
 │   │   ├── chatStorage.ts
 │   │   ├── utils.ts
@@ -97,6 +103,10 @@
 ### Files Content:
 
 
+==== .env.example ====
+# .env.local
+VITE_API_ENDPOINT=
+
 ==== .gitignore ====
 # Logs
 logs
@@ -106,6 +116,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+.env
 
 node_modules
 dist
@@ -686,21 +698,24 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import { AuthProvider } from "./contexts/AuthContext";
 
 const queryClient = new QueryClient();
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
+    <AuthProvider>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </BrowserRouter>
+      </TooltipProvider>
+    </AuthProvider>
   </QueryClientProvider>
 );
 
@@ -715,18 +730,14 @@ import { ChatInput } from "./ChatInput";
 import { TypingIndicator } from "./TypingIndicator";
 import { useToast } from "@/hooks/use-toast";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { clearChat } from "@/lib/chatStorage";
+import { clearChat, saveMessages, loadMessages, saveSessionId, loadSessionId, type SerializableMessage } from "@/lib/chatStorage";
+import { useAuth } from "@/contexts/AuthContext";
+import { SuggestedQuestions } from "./SuggestedQuestions";
 
-import {
-  saveMessages,
-  loadMessages,
-  saveSessionId,
-  loadSessionId,
-  type SerializableMessage,
-} from "@/lib/chatStorage";
+type AppRole = "tms" | "publico" | "alumno" | "relator";
 
 interface CapinChatProps {
-  userRole?: string;
+  userRole?: AppRole;
   apiEndpoint?: string;
   onError?: (error: string) => void;
   className?: string;
@@ -736,16 +747,14 @@ interface CapinChatProps {
 }
 
 export const CapinChat = ({
-  userRole = "",
-  apiEndpoint = "http://localhost:8000/api/chat",
+  apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:8000/api/chat",
   onError,
   className = "",
   onClose,
   showWelcome = true,
   sessionScope = "guest",
 }: CapinChatProps) => {
-
-  const [sessionId, setSessionId] = useState(() => {
+  const [sessionId] = useState(() => {
     const existing = loadSessionId(sessionScope);
     if (existing) return existing;
     const generated = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -755,6 +764,12 @@ export const CapinChat = ({
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+
+  const { user } = useAuth();
+  const initialRole: AppRole = (user?.role as AppRole) ?? "publico";
+
+  const [selectedRole, setSelectedRole] = useState<AppRole>(initialRole);
+  const [rut, setRut] = useState<string>("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -773,43 +788,55 @@ export const CapinChat = ({
       const hydrated: Message[] = raw.map((m: SerializableMessage) => ({
         ...m,
         timestamp: new Date(m.timestamp),
-        files: Array.isArray(m.files) ? m.files as File[] : undefined,
+        files: Array.isArray(m.files) ? (m.files as File[]) : undefined,
       }));
       setMessages(hydrated);
     } else {
-      if (showWelcome) {
-        setMessages([{
-          id: "welcome",
-          text: "¡Hola! Soy Capin, tu asistente virtual de Insecap. ¿En qué puedo ayudarte hoy?",
-          sender: "assistant",
-          timestamp: new Date(),
-        }]);
-      } else {
-        setMessages([]);
-      }
+      setMessages(
+        showWelcome
+          ? [
+              {
+                id: "welcome",
+                text: "¡Hola! Soy Capin, tu asistente virtual de Insecap. ¿En qué puedo ayudarte hoy?",
+                sender: "assistant",
+                timestamp: new Date(),
+              },
+            ]
+          : []
+      );
     }
-  }, [sessionId]);
+  }, [sessionId, showWelcome]);
 
   useEffect(() => {
-    const serializable: SerializableMessage[] = messages.map(m => ({
-      ...m,
+    const serializable: SerializableMessage[] = messages.map((m) => ({
+      id: m.id,
+      text: m.text,
+      sender: m.sender,
       timestamp: m.timestamp.toISOString(),
+      files: m.files,
     }));
-
-    const MAX = 100;
-    const trimmed = serializable.slice(-MAX);
-
-    saveMessages(sessionId, trimmed);
+    saveMessages(sessionId, serializable.slice(-100));
   }, [messages, sessionId]);
 
   const callChatAPI = async (question: string): Promise<string> => {
+    const shouldSendRut = (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
+    const claims = shouldSendRut ? { rut: rut.trim() } : undefined;
+
+    const userPayload: unknown = {
+      sub: "",
+      role: selectedRole,
+      session_id: sessionId,
+      tenantId: "insecap",
+      ...(claims ? { claims } : {}),
+    };
+
     const res = await fetch(apiEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: question,
-        role: userRole,
-        session_id: sessionId,
+        role: selectedRole,
+        user: userPayload,
       }),
     });
 
@@ -823,22 +850,26 @@ export const CapinChat = ({
 
   const handleClearChat = () => {
     const ok = confirm("¿Borrar toda la conversación?");
-      if (!ok) return;
-      if (sessionId) clearChat(sessionId);
-      setMessages([{
+    if (!ok) return;
+    if (sessionId) clearChat(sessionId);
+    setMessages([
+      {
         id: "welcome",
         text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
         sender: "assistant",
         timestamp: new Date(),
-      }]);
-    };
+      },
+    ]);
+  };
 
-  const handleSendMessage = async (text: string) => {
-    if (!text.trim()) return;
+  const handleSendMessage = async (display: string, actual?: string) => {
+    const visibleText = display?.trim();
+    const promptToSend = (actual ?? display)?.trim();
+    if (!visibleText) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
-      text,
+      text: visibleText,
       sender: "user",
       timestamp: new Date(),
     };
@@ -847,37 +878,24 @@ export const CapinChat = ({
     setIsTyping(true);
 
     try {
-      const response = await callChatAPI(text);
-
+      const response = await callChatAPI(promptToSend);
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         text: response,
         sender: "assistant",
         timestamp: new Date(),
       };
-
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
-      const fallback =
-        "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.";
-
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
-          text: fallback,
+          text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
           sender: "assistant",
           timestamp: new Date(),
         },
       ]);
-
-      toast({
-        title: "Error de conexión",
-        description:
-          error instanceof Error ? error.message : "No se pudo enviar el mensaje.",
-        variant: "destructive",
-      });
-
       onError?.(error instanceof Error ? error.message : "Error desconocido");
     } finally {
       setIsTyping(false);
@@ -885,24 +903,31 @@ export const CapinChat = ({
   };
 
   return (
-    <div
-      className={`bg-background border shadow-chat rounded-xl overflow-hidden flex flex-col h-[600px] max-w-md w-full ${className}`}
-    >
-      <ChatHeader userRole={userRole} onClose={onClose} onClear={handleClearChat} />
+    <div className={`bg-background border shadow-chat rounded-xl overflow-hidden flex flex-col h-[600px] max-w-md w-full ${className}`}>
+      <ChatHeader
+        userRole={selectedRole}
+        onClose={onClose}
+        onClear={handleClearChat}
+        onChangeRole={setSelectedRole}
+        rut={rut}
+        onChangeRut={setRut}
+      />
+
+      {selectedRole === "alumno" && (
+        <SuggestedQuestions onAsk={handleSendMessage} role={selectedRole} />
+      )}
 
       <ScrollArea className="flex-1 p-0">
         <div className="space-y-0">
           {messages.map((message) => (
             <ChatMessage key={message.id} message={message} />
           ))}
-
           {isTyping && <TypingIndicator />}
-
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
 
-      <ChatInput onSendMessage={handleSendMessage} disabled={isTyping} />
+      <ChatInput onSendMessage={(text) => handleSendMessage(text)} disabled={isTyping} />
     </div>
   );
 };
@@ -912,96 +937,129 @@ export const CapinChat = ({
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Minimize2, Maximize2, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { X, Trash2, ChevronDown } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
-import { Trash2 } from "lucide-react";
+
+type AppRole = "tms" | "publico" | "alumno" | "relator";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;
-  userRole?: string;
+  userRole?: AppRole;
   onToggleMinimize?: () => void;
   onClose?: () => void;
   onClear?: () => void;
+
+  onChangeRole?: (r: AppRole) => void;
+  rut?: string;
+  onChangeRut?: (rut: string) => void;
 }
 
-export const ChatHeader = ({ 
-  isMinimized, 
-  userRole = "",
-  onToggleMinimize, 
+export const ChatHeader = ({
+  isMinimized,
+  userRole = "publico",
+  onToggleMinimize,
   onClose,
-  onClear
+  onClear,
+  onChangeRole,
+  rut = "",
+  onChangeRut,
 }: ChatHeaderProps) => {
+  const showRut = userRole === "alumno" || userRole === "relator";
+
   return (
-    <div className="bg-gradient-primary text-white p-4 rounded-t-xl shadow-chat">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img 
-            src={insecapLogo} 
-            alt="Insecap" 
-            className="h-12 w-auto"
-          />
-          <div className="border-l border-white/20 pl-3">
+    <div className="bg-gradient-primary text-white p-3 rounded-t-xl shadow-chat">
+      <div className="flex items-start justify-between gap-2">
+        {/* IZQUIERDA */}
+        <div className="flex items-start gap-2 min-w-0">
+          <img src={insecapLogo} alt="Insecap" className="h-8 w-auto shrink-0" />
+          <div className="border-l border-white/20 pl-2 min-w-0">
             <div className="flex items-center gap-2">
-              <Avatar className="w-8 h-8 border-2 border-white/30">
+              <Avatar className="w-7 h-7 border border-white/30 shrink-0">
                 <AvatarImage src={capinMascot} alt="Capin" />
-                <AvatarFallback className="bg-white text-primary text-xs">C</AvatarFallback>
+                <AvatarFallback>CP</AvatarFallback>
               </Avatar>
-              <div>
-                <h2 className="font-semibold text-lg">CapinIA</h2>
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="bg-white/20 text-white border-white/30 text-xs cursor-pointer">
-                    {userRole}
+                  <span className="font-semibold leading-tight text-sm">CapinIA</span>
+                  <Badge variant="outline" className="h-5 px-1.5 border-white/30 text-[11px] text-white/90">
+                    Asistente virtual
                   </Badge>
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-bounce-gentle"></div>
-                    <span className="text-xs opacity-90">En línea</span>
-                  </div>
                 </div>
+                <p className="text-[11px] text-white/70 leading-snug">
+                  ¿En qué puedo ayudarte hoy?
+                </p>
               </div>
+            </div>
+
+            {/* Controles compactos: Rol y (condicional) RUT */}
+            <div className="mt-2 flex flex-row flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-white/80">Rol:</span>
+                <Select value={userRole} onValueChange={(v: AppRole) => onChangeRole?.(v)}>
+                  <SelectTrigger className="h-7 px-2 pr-7 w-[132px] sm:w-[140px] md:w-[150px] text-xs bg-white/10 border-white/30 text-white">
+                    <SelectValue placeholder="Seleccionar rol" />
+                    <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="publico">Público</SelectItem>
+                    <SelectItem value="alumno">Alumno</SelectItem>
+                    <SelectItem value="relator">Relator</SelectItem>
+                    <SelectItem value="tms">TMS</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {showRut && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-white/80 whitespace-nowrap">RUT:</span>
+                  <Input
+                    value={rut}
+                    onChange={(e) => onChangeRut?.(e.target.value)}
+                    placeholder="12.345.678-9"
+                    className="h-7 w-[150px] sm:w-[160px] md:w-[170px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          <button
-          type="button"
-          onClick={onClear}
-          title="Borrar chat"
-          className="p-2 rounded hover:bg-zinc-100"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-          {onToggleMinimize && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onToggleMinimize}
-              className="text-white hover:bg-white/20 h-8 w-8 p-0"
-            >
-              {isMinimized ? (
-                <Maximize2 className="h-4 w-4" />
-              ) : (
-                <Minimize2 className="h-4 w-4" />
-              )}
-            </Button>
-          )}
-          
-          {onClose && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              className="text-white hover:bg-white/20 h-8 w-8 p-0"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
+        {/* DERECHA: acciones (compactas) */}
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClear}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            title="Limpiar conversación"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClose}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            title="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
       </div>
     </div>
   );
 };
+
 
 ==== src\components\ChatInput.tsx ====
 import { useState, useRef } from "react";
@@ -1287,9 +1345,8 @@ const ChatWidget = () => {
             </Button>
           </div>
           <CapinChat
-            userRole="tms"
             className="h-full max-w-none w-full"
-            apiEndpoint="http://localhost:8000/api/chat"
+            apiEndpoint={import.meta.env.VITE_API_ENDPOINT}
             sessionScope="guest"
             showWelcome={true}
           />
@@ -1300,6 +1357,65 @@ const ChatWidget = () => {
 };
 
 export default ChatWidget;
+
+
+==== src\components\SuggestedQuestions.tsx ====
+import { Button } from "@/components/ui/button";
+
+type Props = {
+  onAsk: (display: string, actual?: string) => void;
+  role?: string;
+};
+
+const alumnoQuestions = [
+  {
+    label: "Ver mis notas",
+    prompt:
+      "Muéstrame mis notas del alumno actual. Si hay varias asignaturas, lista cada curso con sus notas en viñetas.",
+  },
+  {
+    label: "Mi asistencia",
+    prompt:
+      "Muéstrame mi asistencia (porcentaje y detalle si existe) del alumno actual. Resume por curso. No mezcles las notas con asistencia",
+  },
+  {
+    label: "Cursos inscritos (numerados)",
+    prompt: `Muéstrame mis cursos inscritos del alumno actual. 
+Devuelve ÚNICAMENTE el listado de cursos numerado (1., 2., 3., …), SIN incluir notas ni comentarios adicionales.
+Usa EXACTAMENTE este estilo:
+
+1. Nombre del curso 1
+2. Nombre del curso 2
+3. Nombre del curso 3
+
+No agregues encabezados, ni texto extra; solo el listado numerado de cursos.`,
+  },
+];
+
+export const SuggestedQuestions = ({ onAsk, role }: Props) => {
+  if (role !== "alumno") return null;
+
+  return (
+    <div className="px-4 pt-3 pb-2 border-b bg-background/70">
+      <div className="text-xs text-muted-foreground mb-2">
+        Preguntas rápidas
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {alumnoQuestions.map((q) => (
+          <Button
+            key={q.label}
+            variant="outline"
+            size="sm"
+            onClick={() => onAsk(q.label, q.prompt)}
+            className="rounded-full"
+          >
+            {q.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 
 ==== src\components\TypingIndicator.tsx ====
@@ -6223,6 +6339,115 @@ import { useToast, toast } from "@/hooks/use-toast";
 export { useToast, toast };
 
 
+==== src\contexts\AuthContext.tsx ====
+// =============================================
+// src/contexts/AuthContext.tsx
+// =============================================
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+
+/**
+ * Definición mínima de identidad que el chat necesita.
+ * NO incluir PII sensible. Solo IDs/roles necesarios para autorización.
+ */
+export type SafeUser = {
+  /** ID interno del TMS (no correo, no rut) */
+  sub: string;
+  /** Nombre para hablar en primera persona (opcional y local) */
+  displayName?: string;
+  /** Rol/permiso dentro del TMS */
+  role: string;
+  /** ID del tenant/cliente/empresa (si corresponde) */
+  tenantId?: string;
+  /** Token de sesión del TMS para llamadas internas del frontend al backend del chat (opcional) */
+  sessionToken?: string;
+  /** Otros claims no sensibles permitidos por seguridad */
+  claims?: Record<string, string | number | boolean>;
+};
+
+export type AuthState = {
+  user: SafeUser | null;
+  loading: boolean;
+};
+
+export type AuthContextValue = AuthState & {
+  /** Set directo (usado por el bridge con TMS o pruebas locales) */
+  setUser: (u: SafeUser | null) => void;
+  /** Limpia sesión local del chat sin afectar TMS */
+  signOutLocal: () => void;
+};
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+const ALLOWED_ORIGINS: string[] = [
+  "https://tms.insecap.cl",
+  "https://stg.tms.insecap.cl",
+  "http://localhost:5173",
+];
+
+export const AuthProvider: React.FC<React.PropsWithChildren<{ initialUser?: SafeUser | null }>> = ({ children, initialUser = null }) => {
+  const [user, setUser] = useState<SafeUser | null>(initialUser ?? null);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  // Cargar desde storage (solo para persistencia local del chat)
+  useEffect(() => {
+    const raw = sessionStorage.getItem("capin.auth");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as SafeUser;
+        setUser(parsed);
+      } catch {/* ignore */}
+    }
+    setLoading(false);
+  }, []);
+
+  // Persistir mínimamente (no PII)
+  useEffect(() => {
+    if (user) sessionStorage.setItem("capin.auth", JSON.stringify(user));
+    else sessionStorage.removeItem("capin.auth");
+  }, [user]);
+
+  // Bridge: recibir identidad desde TMS vía postMessage
+  useEffect(() => {
+    const handler = (ev: MessageEvent) => {
+      if (!ALLOWED_ORIGINS.includes(ev.origin)) return; // hardening
+      const data = ev.data as { type?: string; payload?: unknown };
+      if (data?.type !== "TMS_USER") return;
+
+      const p = data.payload as Partial<SafeUser> | undefined;
+      if (!p || typeof p !== "object" || !p.sub || !p.role) return;
+
+      const safe: SafeUser = {
+        sub: String(p.sub),
+        role: String(p.role),
+        tenantId: p.tenantId ? String(p.tenantId) : undefined,
+        displayName: p.displayName ? String(p.displayName) : undefined,
+        sessionToken: p.sessionToken ? String(p.sessionToken) : undefined,
+        claims: p.claims ?? {
+          
+        },
+      };
+      setUser(safe);
+    };
+
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
+  const signOutLocal = () => setUser(null);
+
+  const value = useMemo<AuthContextValue>(() => ({ user, loading, setUser, signOutLocal }), [user, loading]);
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const useAuth = () => {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
+  return ctx;
+};
+
+
 ==== src\hooks\use-mobile.tsx ====
 import * as React from "react"
 
@@ -6565,6 +6790,43 @@ All colors MUST be HSL.
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Fix para evitar que Radix UI bloquee el scroll del body cuando se abre un select */
+[data-radix-popper-content-wrapper] {
+  z-index: 9999 !important;
+}
+
+/* Asegurar que el body mantenga su scroll */
+body[style*="pointer-events"] {
+  pointer-events: auto !important;
+}
+
+body[style*="overflow: hidden"] {
+  overflow: auto !important;
+}
+
+/* Clase específica para selects que no deben bloquear scroll */
+.radix-no-scroll-block {
+  pointer-events: auto;
+}
+
+/* Evitar que se aplique overflow hidden al body cuando se abre un select con esta clase */
+body:has(.radix-no-scroll-block[data-state="open"]) {
+  overflow: auto !important;
+}
+
+==== src\interfaces\User.ts ====
+export interface User {
+    sub: string; // Unique identifier for the user
+    role: string; // User role, e.g., "admin", "user", "guest"
+    tenantId?: string; // Optional tenant identifier
+    sessionToken?: string; // Optional session token for authentication
+    claims?: Claims; // Optional additional claims
+}
+
+export interface Claims {
+    [key: string]: unknown; // Flexible key-value pairs for additional claims
 }
 
 ==== src\lib\chatStorage.ts ====

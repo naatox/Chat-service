@@ -1,91 +1,123 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Minimize2, Maximize2, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { X, Trash2, ChevronDown } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
-import { Trash2 } from "lucide-react";
+
+type AppRole = "tms" | "publico" | "alumno" | "relator";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;
-  userRole?: string;
+  userRole?: AppRole;
   onToggleMinimize?: () => void;
   onClose?: () => void;
   onClear?: () => void;
+
+  onChangeRole?: (r: AppRole) => void;
+  rut?: string;
+  onChangeRut?: (rut: string) => void;
 }
 
-export const ChatHeader = ({ 
-  isMinimized, 
-  userRole = "",
-  onToggleMinimize, 
+export const ChatHeader = ({
+  isMinimized,
+  userRole = "publico",
+  onToggleMinimize,
   onClose,
-  onClear
+  onClear,
+  onChangeRole,
+  rut = "",
+  onChangeRut,
 }: ChatHeaderProps) => {
+  const showRut = userRole === "alumno" || userRole === "relator";
+
   return (
-    <div className="bg-gradient-primary text-white p-4 rounded-t-xl shadow-chat">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <img 
-            src={insecapLogo} 
-            alt="Insecap" 
-            className="h-12 w-auto"
-          />
-          <div className="border-l border-white/20 pl-3">
+    <div className="bg-gradient-primary text-white p-3 rounded-t-xl shadow-chat">
+      <div className="flex items-start justify-between gap-2">
+        {/* IZQUIERDA */}
+        <div className="flex items-start gap-2 min-w-0">
+          <img src={insecapLogo} alt="Insecap" className="h-8 w-auto shrink-0" />
+          <div className="border-l border-white/20 pl-2 min-w-0">
             <div className="flex items-center gap-2">
-              <Avatar className="w-8 h-8 border-2 border-white/30">
+              <Avatar className="w-7 h-7 border border-white/30 shrink-0">
                 <AvatarImage src={capinMascot} alt="Capin" />
-                <AvatarFallback className="bg-white text-primary text-xs">C</AvatarFallback>
+                <AvatarFallback>CP</AvatarFallback>
               </Avatar>
-              <div>
-                <h2 className="font-semibold text-lg">CapinIA</h2>
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="bg-white/20 text-white border-white/30 text-xs cursor-pointer">
-                    {userRole}
+                  <span className="font-semibold leading-tight text-sm">CapinIA</span>
+                  <Badge variant="outline" className="h-5 px-1.5 border-white/30 text-[11px] text-white/90">
+                    Asistente virtual
                   </Badge>
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 bg-green-400 rounded-full animate-bounce-gentle"></div>
-                    <span className="text-xs opacity-90">En línea</span>
-                  </div>
                 </div>
+                <p className="text-[11px] text-white/70 leading-snug">
+                  ¿En qué puedo ayudarte hoy?
+                </p>
               </div>
+            </div>
+
+            {/* Controles compactos: Rol y (condicional) RUT */}
+            <div className="mt-2 flex flex-row flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1">
+                <span className="text-[11px] text-white/80">Rol:</span>
+                <Select value={userRole} onValueChange={(v: AppRole) => onChangeRole?.(v)}>
+                  <SelectTrigger className="h-7 px-2 pr-7 w-[120px] sm:w-[130px] text-xs bg-white/10 border-white/30 text-white">
+                    <SelectValue placeholder="Seleccionar rol" />
+                    <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="publico">Público</SelectItem>
+                    <SelectItem value="alumno">Alumno</SelectItem>
+                    <SelectItem value="relator">Relator</SelectItem>
+                    <SelectItem value="tms">TMS</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {showRut && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-white/80 whitespace-nowrap">RUT:</span>
+                  <Input
+                    value={rut}
+                    onChange={(e) => onChangeRut?.(e.target.value)}
+                    placeholder="12.345.678-9"
+                    className="h-7 w-[138px] sm:w-[150px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          <button
-          type="button"
-          onClick={onClear}
-          title="Borrar chat"
-          className="p-2 rounded hover:bg-zinc-100"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-          {onToggleMinimize && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onToggleMinimize}
-              className="text-white hover:bg-white/20 h-8 w-8 p-0"
-            >
-              {isMinimized ? (
-                <Maximize2 className="h-4 w-4" />
-              ) : (
-                <Minimize2 className="h-4 w-4" />
-              )}
-            </Button>
-          )}
-          
-          {onClose && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-              className="text-white hover:bg-white/20 h-8 w-8 p-0"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
+        {/* DERECHA: acciones (compactas) */}
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClear}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            title="Limpiar conversación"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onClose}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            title="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
       </div>
     </div>

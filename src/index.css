@@ -124,3 +124,27 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+/* Fix para evitar que Radix UI bloquee el scroll del body cuando se abre un select */
+[data-radix-popper-content-wrapper] {
+  z-index: 9999 !important;
+}
+
+/* Asegurar que el body mantenga su scroll */
+body[style*="pointer-events"] {
+  pointer-events: auto !important;
+}
+
+body[style*="overflow: hidden"] {
+  overflow: auto !important;
+}
+
+/* Clase específica para selects que no deben bloquear scroll */
+.radix-no-scroll-block {
+  pointer-events: auto;
+}
+
+/* Evitar que se aplique overflow hidden al body cuando se abre un select con esta clase */
+body:has(.radix-no-scroll-block[data-state="open"]) {
+  overflow: auto !important;
+}

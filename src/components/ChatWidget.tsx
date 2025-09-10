@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { MessageCircle, X } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import capinMascot from "@/assets/capin-mascot.png";
 import { CapinChat } from "./CapinChat";
 
@@ -60,23 +60,13 @@ const ChatWidget = () => {
     <div className="fixed inset-x-2 bottom-2 md:inset-auto md:right-6 md:bottom-6 z-[60]">
       <div className="relative mx-auto md:mx-0 w-full [width:min(92vw,440px)]">
         <div className="bg-white border border-border rounded-xl shadow-2xl w-full h-[70vh] max-h-[80vh] md:h-[600px] overflow-hidden">
-          <div className="absolute right-2 top-2 z-10">
-            <Button
-              aria-label="Cerrar chat"
-              variant="ghost"
-              size="icon"
-              onClick={() => setOpen(false)}
-              className="h-8 w-8 cursor-pointer text-white"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
           <CapinChat
-            userRole="tms"
             className="h-full max-w-none w-full"
             apiEndpoint="https://rag-service-qgkc.onrender.com/api/chat"
+
             sessionScope="guest"
             showWelcome={true}
+            onClose={() => setOpen(false)}
           />
         </div>
       </div>
