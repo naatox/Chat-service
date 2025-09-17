@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send } from "lucide-react";
@@ -6,11 +6,27 @@ import { Send } from "lucide-react";
 interface ChatInputProps {
   onSendMessage: (text: string) => void; // <- solo texto
   disabled?: boolean;
+  inputRef?: React.RefObject<HTMLTextAreaElement>; // ADD
 }
 
-export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
+export const ChatInput = ({ onSendMessage, disabled, inputRef }: ChatInputProps) => {
   const [message, setMessage] = useState("");
+  const [showCodeHint, setShowCodeHint] = useState(false); // ADD
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Detectar patrón de código de curso (ADD-ONLY)
+  useEffect(() => {
+    const courseCodePattern = /^R-[A-Z]{3}-\d+$/i;
+    const trimmedMessage = message.trim();
+    setShowCodeHint(courseCodePattern.test(trimmedMessage));
+  }, [message]);
+
+  // Foco externo desde CapinChat (ADD-ONLY)
+  useEffect(() => {
+    if (inputRef?.current) {
+      inputRef.current.focus();
+    }
+  }, [inputRef]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,7 +62,7 @@ export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
         <div className="flex gap-2 items-end">
           <div className="flex-1 relative">
             <Textarea
-              ref={textareaRef}
+              ref={inputRef || textareaRef}
               value={message}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
@@ -55,6 +71,22 @@ export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
               className="min-h-[44px] max-h-[120px] resize-none pr-12 border-2 focus:border-primary transition-colors"
               rows={1}
             />
+            
+            {/* Tooltip no intrusivo para códigos de curso (ADD-ONLY) */}
+            {showCodeHint && !disabled && (
+              <div 
+                className="absolute left-0 top-full mt-1 text-xs bg-primary/90 text-primary-foreground rounded-md px-2 py-1 shadow-md z-10 pointer-events-none select-none animate-in fade-in-0 zoom-in-95 duration-200"
+                role="tooltip"
+                aria-label="Información sobre búsqueda de curso"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🎯</span>
+                  <span>Encontraré el curso aunque no esté en esta página</span>
+                </div>
+                {/* Pequeña flecha apuntando al input */}
+                <div className="absolute -top-1 left-3 w-2 h-2 bg-primary/90 rotate-45 transform"></div>
+              </div>
+            )}
           </div>
 
           <Button

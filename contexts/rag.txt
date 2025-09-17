@@ -26,7 +26,6 @@
 │   │   │   │   ├── chat.py
 │   │   ├── adapters/
 │   │   │   ├── __init__.py
-│   │   │   ├── cache.py
 │   │   │   ├── cosmosRepo.py
 │   │   │   ├── cosmos_conversation.py
 │   │   │   ├── moderation.py
@@ -772,7 +771,6 @@ from ...rag.pipeline import Pipeline
 from ...rag.retriever import Retriever
 from ...adapters.cosmos_conversation import CosmosConversationStore
 from ...adapters.telemetry import telemetry
-from ...adapters.cache import TTLCache
 from azure.cosmos import exceptions as cosmos_exc
 from html import unescape
 from typing import Any, Dict, List, Optional
@@ -784,7 +782,6 @@ _emb = OpenAIEmbeddings()
 _chat = OpenAIChat()
 _repo = CosmosRetriever()
 _convo = CosmosConversationStore()
-_cache = TTLCache(capacity=512, ttl_s=300)  # ← ACTIVAMOS CACHÉ EN MEMORIA
 
 try:
     from ...adapters.moderation import BasicModeration
@@ -797,7 +794,6 @@ _pipe = Pipeline(
     llm=_chat,
     mod=_mod,
     convo=_convo,
-    cache=_cache,  # ← PASAMOS CACHÉ A LA PIPELINE
 )
 
 def _normalize_answer(ans: Any) -> tuple[str, List[Dict[str, Optional[str]]]]:
@@ -845,7 +841,7 @@ async def chat(req: ChatRequest):
     if req.user and isinstance(getattr(req.user, "claims", None), dict):
         rut = req.user.claims.get("rut") or None
 
-    # Filtros a pasar a la pipeline (participant_run lo usa la pipeline para la card de asistencia)
+    # Filtros para la pipeline (participant_run lo usa para la card de asistencia)
     filters: Dict[str, Any] = {}
     if rut:
         filters["participant_run"] = _norm_run_to_pk(rut)
@@ -867,7 +863,7 @@ async def chat(req: ChatRequest):
     answer_text = unescape(answer_text or "")
     citations = _normalize_citations(citations_like)
 
-    # === LOG: imprime también las citations en consola ===
+    # Log de citations (útil para debug)
     if citations_like:
         print("=== CITATIONS (respuesta al cliente) ===")
         for i, c in enumerate(citations_like, 1):
@@ -915,10 +911,7 @@ async def diag_retrieval(q: str, k: int = 5, org: str = "insecap"):
 @router.get("/diag/retrieval_vector")
 async def diag_retrieval_vector(k: int = 3, org: str = "insecap", role: str = "publico"):
     """
-    Prueba la consulta vectorial SIN OpenAI:
-    - Detecta la dimensión del embedding en Cosmos
-    - Usa un vector cero de esa dimensión
-    - Usa role='publico' que es el que existe en la DB
+    Prueba la consulta vectorial SIN OpenAI.
     """
     try:
         dim = await _repo.get_embedding_dim()
@@ -929,252 +922,9 @@ async def diag_retrieval_vector(k: int = 3, org: str = "insecap", role: str = "p
         return {"status": e.status_code, "message": f"Cosmos error: {e.message}"}
     except Exception as e:
         return {"status": 500, "message": f"Vector diag error: {e.__class__.__name__}: {e}"}
-
-@router.get("/diag/retrieval_audit")
-async def diag_retrieval_audit():
-    """
-    Audita tus documentos en Cosmos para detectar causas típicas de 400:
-      - 'embedding' no es arreglo
-      - longitudes distintas al baseline
-      - valores no numéricos en el vector
-    """
-    try:
-        report = await _repo.audit_vectors()
-        return report
-    except cosmos_exc.CosmosHttpResponseError as e:
-        return {"status": e.status_code, "message": f"Cosmos error: {e.message}"}
-    except Exception as e:
-        return {"status": 500, "message": f"Audit error: {e.__class__.__name__}: {e}"}
-
-@router.get("/diag/cosmos")
-async def diag_cosmos():
-    code, msg = await _repo.diag()
-    return {"status": code, "message": msg}
-# src/app/_api/routers/chat.py
-from fastapi import APIRouter
-from ...models.schemas import ChatRequest, ChatResponse, Citation
-from ...adapters.openAIClient import OpenAIEmbeddings, OpenAIChat
-from ...adapters.cosmosRepo import CosmosRetriever
-from ...adapters.moderation import NullModeration
-from ...rag.pipeline import Pipeline
-from ...rag.retriever import Retriever
-from ...adapters.cosmos_conversation import CosmosConversationStore
-from ...adapters.telemetry import telemetry
-from ...adapters.cache import TTLCache
-from azure.cosmos import exceptions as cosmos_exc
-from html import unescape
-from typing import Any, Dict, List, Optional
-from ...core.roles import normalize_role
-
-router = APIRouter()
-
-_emb = OpenAIEmbeddings()
-_chat = OpenAIChat()
-_repo = CosmosRetriever()
-_convo = CosmosConversationStore()
-_cache = TTLCache(capacity=512, ttl_s=300)  # ← ACTIVAMOS CACHÉ EN MEMORIA
-
-try:
-    from ...adapters.moderation import BasicModeration
-    _mod = BasicModeration()
-except Exception:
-    _mod = NullModeration()
-
-_pipe = Pipeline(
-    retriever=Retriever(_emb, _repo),
-    llm=_chat,
-    mod=_mod,
-    convo=_convo,
-    cache=_cache,  # ← PASAMOS CACHÉ A LA PIPELINE
-)
-
-def _normalize_answer(ans: Any) -> tuple[str, List[Dict[str, Optional[str]]]]:
-    """
-    Acepta `ans` como str o dict y devuelve (answer_text, citations_list[dict]).
-    """
-    if isinstance(ans, str):
-        return ans, []
-    if isinstance(ans, dict):
-        text = ans.get("answer") or ans.get("text") or ""
-        cits = ans.get("citations") or ans.get("sources") or []
-        if not isinstance(cits, list):
-            cits = []
-        return text, cits
-    return str(ans or ""), []
-
-def _normalize_citations(cits_like: List[Dict[str, Any]]) -> List[Citation]:
-    norm: List[Citation] = []
-    for c in cits_like:
-        try:
-            cid = c.get("id") or c.get("docId") or c.get("sourceId") or ""
-            title = c.get("title")
-            url = c.get("url") or c.get("href")
-            norm.append(Citation(id=str(cid), title=title, url=url))
-        except Exception:
-            continue
-    return norm
-
-def _norm_run_to_pk(run: Optional[str]) -> Optional[str]:
-    if not run:
-        return None
-    return run.strip()
-
-@router.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    # Rol efectivo
-    raw_role = req.role or (getattr(req.user, "role", None) if req.user else None)
-    role = normalize_role(raw_role)
-
-    # Sesión efectiva
-    session_id = req.session_id or (getattr(req.user, "session_id", None) if req.user else None)
-
-    # RUT desde claims (si viene autenticado)
-    rut = None
-    if req.user and isinstance(getattr(req.user, "claims", None), dict):
-        rut = req.user.claims.get("rut") or None
-
-    # Filtros a pasar a la pipeline (participant_run lo usa la pipeline para la card de asistencia)
-    filters: Dict[str, Any] = {}
-    if rut:
-        filters["participant_run"] = _norm_run_to_pk(rut)
-
-    print(f"Chat request - role={role}, session_id={session_id}, filters={filters}")
-
-    ans = await _pipe.handle(
-        req.message,
-        role,
-        org_id="insecap",
-        session_id=session_id,
-        k=req.top_k,
-        kbVersion="v1",
-        **filters,
-    )
-
-    # Normalización de salida
-    answer_text, citations_like = _normalize_answer(ans)
-    answer_text = unescape(answer_text or "")
-    citations = _normalize_citations(citations_like)
-
-    # === LOG: imprime también las citations en consola ===
-    if citations_like:
-        print("=== CITATIONS (respuesta al cliente) ===")
-        for i, c in enumerate(citations_like, 1):
-            print(f"{i:02d}. id={c.get('id')} | title={c.get('title')} | url={c.get('url')}")
-
-    snap = telemetry.snapshot() if hasattr(telemetry, "snapshot") else {}
-    usage = {
-        "prompt_tokens": (snap or {}).get("prompt_tokens"),
-        "completion_tokens": (snap or {}).get("completion_tokens"),
-    }
-    spans = (snap or {}).get("spans") or {}
-    try:
-        lat_ms = int(sum(spans.values())) if isinstance(spans, dict) else None
-    except Exception:
-        lat_ms = None
-
-    return ChatResponse(
-        answer=answer_text,
-        citations=citations,
-        usage=usage,
-        latency_ms=lat_ms,
-        session_id=req.session_id,
-    )
-
-@router.get("/diag/emb")
-async def diag_emb():
-    v = await _emb.embed("ping")
-    return {"dims": len(v)}
-
-@router.get("/diag/retrieval")
-async def diag_retrieval(q: str, k: int = 5, org: str = "insecap"):
-    """Diagnóstico de retrieval (incluye embeddings). Devuelve el error en claro si falla."""
-    try:
-        passages = await _pipe.retriever.retrieve(q, role="publico", org_id=org, k=k)
-        return {
-            "hits": len(passages or []),
-            "sample": passages[:3] if passages else [],
-            "org": org,
-        }
-    except cosmos_exc.CosmosHttpResponseError as e:
-        return {"status": e.status_code, "message": f"Cosmos error: {e.message}"}
-    except Exception as e:
-        return {"status": 500, "message": f"Retrieval error: {e.__class__.__name__}: {e}"}
-
-@router.get("/diag/retrieval_vector")
-async def diag_retrieval_vector(k: int = 3, org: str = "insecap", role: str = "publico"):
-    """
-    Prueba la consulta vectorial SIN OpenAI:
-    - Detecta la dimensión del embedding en Cosmos
-    - Usa un vector cero de esa dimensión
-    - Usa role='publico' que es el que existe en la DB
-    """
-    try:
-        dim = await _repo.get_embedding_dim()
-        zero = [0.0] * dim
-        rows = await _repo.top_k(qvec=zero, role=role, k=k, org_id=org, filters={})
-        return {"dim": dim, "hits": len(rows), "sample": rows[:2]}
-    except cosmos_exc.CosmosHttpResponseError as e:
-        return {"status": e.status_code, "message": f"Cosmos error: {e.message}"}
-    except Exception as e:
-        return {"status": 500, "message": f"Vector diag error: {e.__class__.__name__}: {e}"}
-
-@router.get("/diag/retrieval_audit")
-async def diag_retrieval_audit():
-    """
-    Audita tus documentos en Cosmos para detectar causas típicas de 400:
-      - 'embedding' no es arreglo
-      - longitudes distintas al baseline
-      - valores no numéricos en el vector
-    """
-    try:
-        report = await _repo.audit_vectors()
-        return report
-    except cosmos_exc.CosmosHttpResponseError as e:
-        return {"status": e.status_code, "message": f"Cosmos error: {e.message}"}
-    except Exception as e:
-        return {"status": 500, "message": f"Audit error: {e.__class__.__name__}: {e}"}
-
-@router.get("/diag/cosmos")
-async def diag_cosmos():
-    code, msg = await _repo.diag()
-    return {"status": code, "message": msg}
 
 
 ==== src\app\adapters\__init__.py ====
-
-
-==== src\app\adapters\cache.py ====
-import time
-from typing import Any, Optional
-
-class TTLCache:
-    def __init__(self, capacity: int = 256, ttl_s: int = 300):
-        self.capacity = capacity
-        self.ttl_s = ttl_s
-        self._store: dict[str, tuple[float, Any]] = {}
-
-    def _evict(self):
-        if len(self._store) <= self.capacity:
-            return
-        # Evict oldest
-        oldest = sorted(self._store.items(), key=lambda kv: kv[1][0])[: len(self._store) - self.capacity]
-        for k, _ in oldest:
-            self._store.pop(k, None)
-
-    async def get(self, key: str) -> Optional[Any]:
-        now = time.time()
-        v = self._store.get(key)
-        if not v: return None
-        exp, val = v
-        if now > exp:
-            self._store.pop(key, None)
-            return None
-        return val
-
-    async def set(self, key: str, value: Any, ttl_s: Optional[int] = None) -> None:
-        ttl = ttl_s if ttl_s is not None else self.ttl_s
-        self._store[key] = (time.time() + ttl, value)
-        self._evict()
 
 
 ==== src\app\adapters\cosmosRepo.py ====
@@ -2311,12 +2061,11 @@ def render(answer: str, passages: List[Dict], role: str | None = None) -> str:
 
 ==== src\app\rag\pipeline.py ====
 # src/app/rag/pipeline.py
-from hashlib import sha256
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import re
 
-from ..core.ports import LLMPort, ModerationPort, ConversationStorePort, AnswerCachePort
+from ..core.ports import LLMPort, ModerationPort, ConversationStorePort
 from ..adapters.telemetry import telemetry
 from ..core.security import sanitize_user
 from .prompts import build_user, system_for_role
@@ -2330,7 +2079,6 @@ ANCHOR_DOC_TYPE = "entity_anchor_card"
 RXX_DOC_TYPE = "entity_rxx_card"
 PARTICIPANT_NOTES_DOC_TYPE = "participant_notes_card"   # si tu retriever la emite
 
-
 class Pipeline:
     def __init__(
         self,
@@ -2338,18 +2086,13 @@ class Pipeline:
         llm: LLMPort,
         mod: ModerationPort,
         convo: ConversationStorePort | None = None,
-        cache: AnswerCachePort | None = None
     ):
         self.retriever, self.llm, self.mod = retriever, llm, mod
-        self.convo, self.cache = convo, cache
+        self.convo = convo
         # acceso opcional al repo (CosmosRetriever) para lookups de entidades
         self.repo = getattr(retriever, "repo", None) or getattr(self.retriever, "repo", None)
 
     # ---------------- Utils ----------------
-    def _cache_key(self, question: str, role: str, org_id: str | None, kbv: str | None) -> str:
-        key = f"{(question or '').strip().lower()}|{(role or '').strip().lower()}|{org_id or '-'}|{kbv or '-'}"
-        return sha256(key.encode('utf-8')).hexdigest()
-
     def _augment_query(self, q: str, history: list[dict]) -> str:
         last_course_mention = ""
         for m in reversed(history or []):
@@ -2372,95 +2115,16 @@ class Pipeline:
     ]
     _ATTENDANCE_PATTERNS = [
         r"\b(asistencia|asistencias|porcentaje\s+de\s+asistencia)\b",
-        r"\b%?\s*asistencia\b",
+        r"\bR11\b|\bR12\b|\bR61\b",
     ]
 
-    def _detect_mode(self, user_message: str) -> str:
-        """
-        Devuelve:
-          - 'courses_only'       → listado numerado de cursos
-          - 'attendance_pct'     → porcentaje de asistencia por curso
-          - 'notes_by_course'    → (por defecto) cursos con notas
-        """
-        t = (user_message or "").lower()
-        if any(re.search(p, t) for p in self._ATTENDANCE_PATTERNS):
+    def _detect_mode(self, q: str) -> str:
+        ql = (q or "").lower()
+        if any(re.search(p, ql) for p in self._COURSES_ONLY_PATTERNS):
+            return "courses_only"
+        if any(re.search(p, ql) for p in self._ATTENDANCE_PATTERNS):
             return "attendance_pct"
-        if any(re.search(p, t) for p in self._COURSES_ONLY_PATTERNS):
-            return "courses_only"
-        # heurística: si el usuario muestra un ejemplo con "1. "
-        if re.search(r"\n?\s*1\.\s+\S", t):
-            return "courses_only"
-        return "notes_by_course"
-
-    # ---------- Card sintética: asistencias por curso ----------
-    async def _participant_attendance_card(self, rut: str, org_id: Optional[str], role: str) -> Optional[Dict[str, Any]]:
-        """
-        Calcula % asistencia por curso a partir de entidades kb_participante (pk='rut:<run>').
-        Usa repo.list_participants_by_run si está disponible.
-        """
-        list_fn = getattr(self.repo, "list_participants_by_run", None) if self.repo else None
-        if not callable(list_fn):
-            return None
-
-        ents = await list_fn(rut, org_id) or []
-        if not ents:
-            print(f"[ATTEND] No se encontraron kb_participante para RUT={rut}")
-            return None
-
-        # Mapa: idCurso -> {"nombre": str, "ok": int, "total": int}
-        acc: dict[int, dict] = {}
-
-        for ent in ents:
-            data = (ent.get("data") or {})
-
-            # Descubre cursos (r13)
-            for r in (data.get("r13") or []):
-                idc = r.get("idCurso")
-                if not idc:
-                    continue
-                acc.setdefault(idc, {
-                    "nombre": r.get("nombreDiploma") or "Curso sin nombre",
-                    "ok": 0,
-                    "total": 0
-                })
-
-            # Suma asistencias por participante
-            for part in (data.get("participante") or []):
-                asis = part.get("asistencias") or []
-                # Heurística: si hay 1 curso, atribuye allí; si hay varios y no hay llave,
-                # suma a todos (hasta que el dato traiga mapeo explícito por curso).
-                target_ids = list(acc.keys()) or []
-                for a in asis:
-                    for idc in target_ids:
-                        acc[idc]["total"] += 1
-                        if a.get("asistio") is True:
-                            acc[idc]["ok"] += 1
-
-        # Construye el contenido enumerado "1. Nombre (XX,YY%)"
-        lines: List[str] = []
-        for i, (_idc, info) in enumerate(acc.items(), start=1):
-            tot = max(1, int(info["total"]))  # evitar división por cero
-            pct = round(100.0 * float(info["ok"]) / float(tot), 2)
-            lines.append(f"{i}. {info['nombre']} ({pct}%)")
-
-        content = "\n".join(lines) if lines else "Sin asistencias disponibles"
-        head_ent = ents[0]
-        return {
-            "id": f"synth:participant:attendance:{rut}",
-            "pk": f"rut:{rut}",
-            "orgId": org_id,
-            "rolesAllowed": [role],
-            "docType": "participant_attendance_card",
-            "title": f"Asistencias — RUT {rut}",
-            "content": content,
-            "sensitivity": head_ent.get("sensitivity", "private"),
-            "sourceId": head_ent.get("sourceId", "entities"),
-            "externalId": "",
-            "page": None,
-            "score": 1.0,
-            "entity": {"rut": rut, "courses": len(acc)},
-            "entity_text": content,
-        }
+        return "default"
 
     # ---------------- Main ----------------
     async def handle(
@@ -2488,15 +2152,7 @@ class Pipeline:
             safe_msg = "Tu consulta fue bloqueada por políticas de uso. Reformúlala evitando pedir contraseñas, usuarios o instrucciones internas."
             return {"answer": safe_msg, "citations": []}
 
-        # 1) Cache (lookup)
-        ck = None
-        if self.cache:
-            ck = self._cache_key(q, role, org_id, kbVersion)
-            cached = await self.cache.get(ck)
-            if cached:
-                return cached
-
-        # 2) Historial y sesión
+        # 1) Historial y sesión (sin caché)
         history: List[Dict[str, Any]] = []
         sess: Dict[str, Any] = {}
         if self.convo and session_id:
@@ -2510,73 +2166,24 @@ class Pipeline:
             f"- {m.get('content','')}" for m in history if m.get("messageRole") == "user"
         )[:1000]
 
-        # 3) Reescritura de query y filtro por foco
+        # 2) Reescritura de query y filtro por foco
         focus_pk = (sess or {}).get("focusPk")
         aug_q = self._augment_query(q, history)
         filters = dict(filters or {})
         if focus_pk:
             filters["pk"] = focus_pk
 
-        # 4) Recuperación de contexto
+        # 3) Recuperación de contexto
         with telemetry.span("retrieval"):
             passages = await self.retriever.retrieve(
                 query=aug_q, role=role, org_id=org_id, k=k, kbVersion=kbVersion, **filters
             )
         passages = passages or []
 
-        # Log diagnóstico (opcional)
-        if passages:
-            print("=== CONTEXTO (Cosmos chunks/cards) ===")
-            for i, p in enumerate(passages[:15], 1):
-                snippet = (p.get("content") or "").replace("\n", " ")[:220]
-                print(
-                    f"{i:02d}. id={p.get('id')} | pk={p.get('pk')} | docType={p.get('docType')} | "
-                    f"score={p.get('score')} | title={p.get('title') or ''}\n    {snippet}"
-                )
-
-        base_citations = [
-            {"id": p.get("id"), "title": p.get("title") or p.get("docType") or "", "url": None}
-            for p in passages
-        ]
-
-        # 4.b) Intención + estilo (antes de short-circuits)
+        # 4) Cartas especiales y estilo de salida
+        base_citations = []
         mode = self._detect_mode(q)
         style_instructions = style_for_mode(mode)
-
-        # 4.c) Si piden asistencia y tenemos RUT en filtros → generar card sintética
-        participant_run = filters.get("participant_run") or filters.get("participant_run".upper())
-        if mode == "attendance_pct" and participant_run:
-            try:
-                att_card = await self._participant_attendance_card(participant_run, org_id, role)
-                if att_card:
-                    passages = [att_card]  # contexto reducido a la card
-                    base_citations = [{"id": att_card.get("id"), "title": att_card.get("title") or "asistencias", "url": None}]
-            except Exception as e:
-                print(f"[ATTEND] card error: {e}")
-
-        # 4.d) Desambiguación: devolver directo
-        disamb = next((p for p in passages if (p.get("docType") or "").lower() == DISAMBIG_DOC_TYPE), None)
-        if disamb:
-            out = {
-                "answer": disamb.get("content") or "Se encontraron varias coincidencias. Indica el código o id del curso.",
-                "citations": [{"id": disamb.get("id"), "title": disamb.get("title") or "desambiguación", "url": None}],
-            }
-            if self.cache and ck:
-                try: await self.cache.set(ck, out, ttl_s=300)
-                except Exception: pass
-            return out
-
-        # 4.e) Notes card: devolver directo SOLO si el modo no exige “solo cursos” ni “asistencia”
-        notes_card = next((p for p in passages if (p.get("docType") or "").lower() == PARTICIPANT_NOTES_DOC_TYPE), None)
-        if notes_card and mode not in ("courses_only", "attendance_pct"):
-            out = {
-                "answer": notes_card.get("content") or "No hay notas registradas.",
-                "citations": [{"id": notes_card.get("id"), "title": notes_card.get("title") or "notas", "url": None}],
-            }
-            if self.cache and ck:
-                try: await self.cache.set(ck, out, ttl_s=180)
-                except Exception: pass
-            return out
 
         # 4.f) Anchor: persistir focusPk si viene
         anchor = next((p for p in passages if (p.get("docType") or "").lower() == ANCHOR_DOC_TYPE), None)
@@ -2596,6 +2203,7 @@ class Pipeline:
 
         # 5) Prompts base + INSTRUCCIONES DE FORMATO
         system_prompt = system_for_role(role)
+        # ✅ Llamada correcta a build_user con keywords (evita TypeError)
         user_prompt = build_user(role=role, question=q, passages=passages, prev_user_msgs=prev_user_msgs)
         user_prompt = f"{user_prompt}\n\n=== INSTRUCCIONES DE FORMATO ===\n{style_instructions}\n"
 
@@ -2610,11 +2218,7 @@ class Pipeline:
                 resp = await self.llm.chat(messages, temperature=0.15, max_tokens=800)
             except Exception:
                 answer = "No fue posible generar respuesta en este momento. Inténtalo nuevamente en unos segundos."
-                out = {"answer": answer, "citations": base_citations}
-                if self.cache and ck:
-                    try: await self.cache.set(ck, out, ttl_s=120)
-                    except Exception: pass
-                return out
+                return {"answer": answer, "citations": base_citations}
 
         # 7) Parseo y telemetría
         try:
@@ -2652,7 +2256,7 @@ class Pipeline:
 
         # 9) Formateo final
         with telemetry.span("formatting"):
-            out_text = render(text, passages or [])
+            out_text = render(text, passages or [], role=role)
         out = {"answer": out_text, "citations": base_citations}
 
         # 10) Persistencia conversación/sesión
@@ -2669,20 +2273,12 @@ class Pipeline:
                 await self.convo.append_turn({
                     "sessionId": session_id, "orgId": org_id or "insecap",
                     "turn": next_turn + 1, "messageRole": "assistant", "content": out_text,
-                    "citations": base_citations, "createdAt": now
+                    "citations": out.get("citations") or [], "createdAt": now
                 })
                 await self.convo.upsert_session({
                     "sessionId": session_id, "orgId": org_id or "insecap",
-                    "lastTurn": next_turn + 1, "lastMessageAt": now,
-                    "focusPk": anchor_pk or focus_pk
+                    "lastTurn": next_turn + 1, "lastMessageAt": now
                 })
-            except Exception:
-                pass
-
-        # 11) Cache (set)
-        if self.cache and ck:
-            try:
-                await self.cache.set(ck, out, ttl_s=300)
             except Exception:
                 pass
 

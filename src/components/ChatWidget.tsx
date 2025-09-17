@@ -62,8 +62,7 @@ const ChatWidget = () => {
         <div className="bg-white border border-border rounded-xl shadow-2xl w-full h-[70vh] max-h-[80vh] md:h-[600px] overflow-hidden">
           <CapinChat
             className="h-full max-w-none w-full"
-            apiEndpoint="https://rag-service-qgkc.onrender.com/api/chat"
-
+            apiEndpoint={import.meta.env.VITE_API_ENDPOINT}
             sessionScope="guest"
             showWelcome={true}
             onClose={() => setOpen(false)}

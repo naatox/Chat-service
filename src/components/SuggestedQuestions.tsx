@@ -1,8 +1,15 @@
 import { Button } from "@/components/ui/button";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 type Props = {
   onAsk: (display: string, actual?: string) => void;
   role?: string;
+  isMobile?: boolean;
 };
 
 const alumnoQuestions = [
@@ -30,27 +37,59 @@ No agregues encabezados, ni texto extra; solo el listado numerado de cursos.`,
   },
 ];
 
-export const SuggestedQuestions = ({ onAsk, role }: Props) => {
-  if (role !== "alumno") return null;
+const relatorQuestions = [
+  {
+    label: "Mis cursos dictados",
+    prompt:
+      "Muéstrame los cursos que estoy dictando actualmente como relator. Lista cada curso con sus detalles básicos.",
+  },
+  {
+    label: "Mi agenda próxima",
+    prompt:
+      "Muéstrame mi agenda próxima como relator, incluyendo fechas y horarios de mis clases programadas. En caso de no existir, indícalo claramente.",
+  },
+  {
+    label: "Cursos realizados en este año",
+    prompt:
+      "Muéstrame todos los cursos que he dictado en este año como relator, organizados por fecha. Si no existen cursos este año, indícalo claramente.",
+  },
+
+];
+
+export const SuggestedQuestions = ({ onAsk, role, isMobile = false }: Props) => {
+  // Solo mostrar para alumno y relator
+  if (role !== "alumno" && role !== "relator") return null;
+
+  const questions = role === "alumno" ? alumnoQuestions : relatorQuestions;
+  const titleText = role === "alumno" ? "Preguntas rápidas" : "Consultas de relator";
 
   return (
-    <div className="px-4 pt-3 pb-2 border-b bg-background/70">
-      <div className="text-xs text-muted-foreground mb-2">
-        Preguntas rápidas
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {alumnoQuestions.map((q) => (
-          <Button
-            key={q.label}
-            variant="outline"
-            size="sm"
-            onClick={() => onAsk(q.label, q.prompt)}
-            className="rounded-full"
+    <div className="border-b bg-background/70">
+      <Accordion type="single" collapsible defaultValue={isMobile ? undefined : "sug"}>
+        <AccordionItem value="sug" className="border-b-0">
+          <AccordionTrigger 
+            className="px-4 pt-3 pb-2 text-xs text-muted-foreground hover:no-underline"
+            aria-label={`Mostrar/ocultar ${titleText.toLowerCase()}`}
           >
-            {q.label}
-          </Button>
-        ))}
-      </div>
+            {titleText}
+          </AccordionTrigger>
+          <AccordionContent className="px-4 pb-2 pt-0">
+            <div className="flex flex-wrap gap-2">
+              {questions.map((q) => (
+                <Button
+                  key={q.label}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onAsk(q.label, q.prompt)}
+                  className="rounded-full"
+                >
+                  {q.label}
+                </Button>
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   );
 };

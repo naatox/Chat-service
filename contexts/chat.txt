@@ -723,18 +723,44 @@ export default App;
 
 
 ==== src\components\CapinChat.tsx ====
-import { useState, useRef, useEffect } from "react";
+// src/components/CapinChat.tsx
+import { useState, useRef, useEffect, useMemo } from "react";
 import { ChatHeader } from "./ChatHeader";
 import { ChatMessage, type Message } from "./ChatMessage";
 import { ChatInput } from "./ChatInput";
 import { TypingIndicator } from "./TypingIndicator";
-import { useToast } from "@/hooks/use-toast";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { clearChat, saveMessages, loadMessages, saveSessionId, loadSessionId, type SerializableMessage } from "@/lib/chatStorage";
+import {
+  clearChat,
+  saveMessages,
+  loadMessages,
+  saveSessionId,
+  loadSessionId,
+  type SerializableMessage,
+} from "@/lib/chatStorage";
 import { useAuth } from "@/contexts/AuthContext";
 import { SuggestedQuestions } from "./SuggestedQuestions";
+import { toast } from "@/components/ui/use-toast";
+import { useIsMobile } from "@/hooks/use-mobile"; 
 
 type AppRole = "tms" | "publico" | "alumno" | "relator";
+
+interface ChatApiMeta {
+  total_cursos?: number;
+  page?: number;
+  page_size?: number;
+  returned?: number;
+  citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  [k: string]: unknown;
+}
+
+interface ChatApiResponse {
+  answer: string;
+  citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  usage?: Record<string, unknown>;
+  latency_ms?: number | null;
+  session_id?: string | null;
+  meta?: ChatApiMeta | null;
+}
 
 interface CapinChatProps {
   userRole?: AppRole;
@@ -745,6 +771,24 @@ interface CapinChatProps {
   showWelcome?: boolean;
   sessionScope?: string;
 }
+
+// Telemetría opcional (ADD-ONLY)
+const sendTelemetry = (event: string, data?: Record<string, unknown>) => {
+  try {
+    // Solo enviar si hay endpoint de telemetría disponible
+    if (typeof window !== 'undefined' && window.fetch) {
+      window.fetch("/api/telemetry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event, timestamp: new Date().toISOString(), ...data }),
+      }).catch(() => {
+        // Silenciar errores de telemetría
+      });
+    }
+  } catch {
+    // Silenciar errores de telemetría
+  }
+};
 
 export const CapinChat = ({
   apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:8000/api/chat",
@@ -765,6 +809,9 @@ export const CapinChat = ({
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
 
+  const [lastMeta, setLastMeta] = useState<ChatApiMeta | null>(null);
+  const [lastQuery, setLastQuery] = useState<string>("");
+
   const { user } = useAuth();
   const initialRole: AppRole = (user?.role as AppRole) ?? "publico";
 
@@ -772,7 +819,8 @@ export const CapinChat = ({
   const [rut, setRut] = useState<string>("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { toast } = useToast();
+  const inputRef = useRef<HTMLTextAreaElement>(null); // ADD
+  const isMobile = useIsMobile(); // ADD
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -818,8 +866,74 @@ export const CapinChat = ({
     saveMessages(sessionId, serializable.slice(-100));
   }, [messages, sessionId]);
 
-  const callChatAPI = async (question: string): Promise<string> => {
-    const shouldSendRut = (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
+  // Toast para paginación (ADD-ONLY)
+  useEffect(() => {
+    if (
+      lastMeta &&
+      typeof lastMeta.total_cursos === "number" &&
+      typeof lastMeta.page_size === "number" &&
+      lastMeta.total_cursos > lastMeta.page_size
+    ) {
+      toast({
+        title: "Navegación de cursos",
+        description: "Navega con 'siguiente/anterior' o escribe un código para ir directo al curso.",
+        duration: 5000,
+      });
+    }
+  }, [lastMeta]);
+
+  // --- Paginación derivada del meta ---
+  const page = Number(lastMeta?.page ?? 0);
+  const pageSize = Number(lastMeta?.page_size ?? 0);
+  const total = Number(lastMeta?.total_cursos ?? 0);
+  const totalPages = useMemo(() => {
+    if (!pageSize || !total) return 0;
+    return Math.max(1, Math.ceil(total / pageSize));
+  }, [pageSize, total]);
+
+  const hasPagination = totalPages > 1 && page > 0 && pageSize > 0;
+  const canPrev = hasPagination && page > 1;
+  const canNext = hasPagination && page < totalPages;
+
+  useEffect(() => {
+    if (inputRef.current && (canPrev || canNext)) {
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  }, [page, canPrev, canNext]);
+
+  const courseCodePattern = /^R-[A-Z]{3}-\d+$/i;
+  const renderDisambiguationChips = (citations?: ChatApiResponse["citations"]) => {
+    if (!citations || !Array.isArray(citations) || citations.length < 2) return null;
+    
+    return (
+      <div className="flex flex-wrap gap-2 my-3 px-4" aria-label="Opciones de cursos similares">
+        <div className="text-xs text-muted-foreground mb-1 w-full">Cursos relacionados:</div>
+        {citations.map((c, idx) =>
+          c.id ? (
+            <button
+              key={`${c.id}-${idx}`}
+              className="px-3 py-1.5 rounded-full bg-muted hover:bg-primary/10 border text-xs transition-colors duration-200 font-medium"
+              onClick={() => handleSendMessage(c.id!)}
+              aria-label={`Consultar curso ${c.id}`}
+              type="button"
+            >
+              {c.id}
+              {c.title && (
+                <span className="ml-1 text-muted-foreground">• {c.title.slice(0, 20)}...</span>
+              )}
+            </button>
+          ) : null
+        )}
+      </div>
+    );
+  };
+
+  // === API ===
+  const callChatAPI = async (question: string): Promise<ChatApiResponse> => {
+    const shouldSendRut =
+      (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
     const claims = shouldSendRut ? { rut: rut.trim() } : undefined;
 
     const userPayload: unknown = {
@@ -844,8 +958,8 @@ export const CapinChat = ({
       const text = await res.text();
       throw new Error(`HTTP ${res.status} - ${text}`);
     }
-    const data = await res.json();
-    return data.answer as string;
+    const data = (await res.json()) as ChatApiResponse;
+    return data;
   };
 
   const handleClearChat = () => {
@@ -860,12 +974,23 @@ export const CapinChat = ({
         timestamp: new Date(),
       },
     ]);
+    setLastMeta(null);
+    setLastQuery("");
   };
 
   const handleSendMessage = async (display: string, actual?: string) => {
     const visibleText = display?.trim();
     const promptToSend = (actual ?? display)?.trim();
     if (!visibleText) return;
+
+    if (courseCodePattern.test(visibleText)) {
+      sendTelemetry("course_code_query", { 
+        pattern: "course_code",
+        session_scope: sessionScope 
+      });
+    }
+
+    setLastQuery(promptToSend);
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -878,14 +1003,24 @@ export const CapinChat = ({
     setIsTyping(true);
 
     try {
-      const response = await callChatAPI(promptToSend);
+      const data = await callChatAPI(promptToSend);
+      setLastMeta(data.meta ?? null);
+
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: response,
+        text: data.answer ?? "",
         sender: "assistant",
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
+
+      if (data.citations && data.citations.length > 1) {
+        toast({
+          title: "Varios cursos encontrados",
+          description: "Selecciona el código exacto para ver detalles específicos.",
+          duration: 4000,
+        });
+      }
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -902,8 +1037,38 @@ export const CapinChat = ({
     }
   };
 
+  const goToPage = (n: number) => {
+    if (!n || n < 1 || (hasPagination && n > totalPages)) return;
+    sendTelemetry("page_nav", { 
+      page: n, 
+      total_pages: totalPages,
+      session_scope: sessionScope 
+    });
+    
+    const display = `→ Página ${n}`;
+    const internal = `pagina ${n}`;
+    handleSendMessage(display, internal);
+  };
+
+  const showingCount = useMemo(() => {
+    if (!hasPagination) return 0;
+    const shown = Math.min(pageSize, total - (page - 1) * pageSize);
+    return Math.max(0, shown);
+  }, [hasPagination, page, pageSize, total]);
+
+  const lastAssistantMessage = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].sender === "assistant") {
+        return messages[i];
+      }
+    }
+    return null;
+  }, [messages]);
+
   return (
-    <div className={`bg-background border shadow-chat rounded-xl overflow-hidden flex flex-col h-[600px] max-w-md w-full ${className}`}>
+    <div
+      className={`bg-background border shadow-chat rounded-xl overflow-hidden flex flex-col h-[600px] max-w-md w-full ${className}`}
+    >
       <ChatHeader
         userRole={selectedRole}
         onClose={onClose}
@@ -913,21 +1078,70 @@ export const CapinChat = ({
         onChangeRut={setRut}
       />
 
+      {/* Sugeridas solo para alumno */}
       {selectedRole === "alumno" && (
         <SuggestedQuestions onAsk={handleSendMessage} role={selectedRole} />
       )}
 
-      <ScrollArea className="flex-1 p-0">
+      {/* Contenedor de mensajes */}
+      <div
+        className="
+          flex-1 overflow-y-auto overscroll-contain scroll-smooth
+          px-0
+          [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden
+        "
+      >
         <div className="space-y-0">
           {messages.map((message) => (
             <ChatMessage key={message.id} message={message} />
           ))}
           {isTyping && <TypingIndicator />}
+          
+          {/* Chips de desambiguación después del último mensaje del asistente (ADD-ONLY) */}
+          {!isTyping && lastAssistantMessage && renderDisambiguationChips(lastMeta?.citations)}
+          
           <div ref={messagesEndRef} />
         </div>
-      </ScrollArea>
+        
+        {/* Hint bajo los listados (ADD-ONLY) */}
+        {hasPagination && (
+          <div className="px-4 py-3 text-xs text-muted-foreground border-t bg-background/80 backdrop-blur-sm">
+            💡 <strong>Tip:</strong> Para ver detalles de un curso específico, escribe su código (ej.: R-REC-214).
+          </div>
+        )}
+      </div>
 
-      <ChatInput onSendMessage={(text) => handleSendMessage(text)} disabled={isTyping} />
+      {hasPagination && (
+        <div className="border-t bg-muted/50 px-3 py-2 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            Página {page} / {totalPages} • Mostrando {showingCount} de {total}
+          </span>
+          <div className="flex gap-2">
+            <button
+              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
+              onClick={() => goToPage(page - 1)}
+              disabled={!canPrev || isTyping}
+              aria-label="Página anterior"
+            >
+              ← Anterior
+            </button>
+            <button
+              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
+              onClick={() => goToPage(page + 1)}
+              disabled={!canNext || isTyping}
+              aria-label="Página siguiente"
+            >
+              Siguiente →
+            </button>
+          </div>
+        </div>
+      )}
+
+      <ChatInput 
+        onSendMessage={(text) => handleSendMessage(text)} 
+        disabled={isTyping} 
+        inputRef={inputRef}
+      />
     </div>
   );
 };
@@ -1005,7 +1219,7 @@ export const ChatHeader = ({
               <div className="flex items-center gap-1">
                 <span className="text-[11px] text-white/80">Rol:</span>
                 <Select value={userRole} onValueChange={(v: AppRole) => onChangeRole?.(v)}>
-                  <SelectTrigger className="h-7 px-2 pr-7 w-[132px] sm:w-[140px] md:w-[150px] text-xs bg-white/10 border-white/30 text-white">
+                  <SelectTrigger className="h-7 px-2 pr-7 w-[120px] sm:w-[130px] text-xs bg-white/10 border-white/30 text-white">
                     <SelectValue placeholder="Seleccionar rol" />
                     <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
                   </SelectTrigger>
@@ -1025,7 +1239,7 @@ export const ChatHeader = ({
                     value={rut}
                     onChange={(e) => onChangeRut?.(e.target.value)}
                     placeholder="12.345.678-9"
-                    className="h-7 w-[150px] sm:w-[160px] md:w-[170px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                    className="h-7 w-[138px] sm:w-[150px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
                   />
                 </div>
               )}
@@ -1062,7 +1276,7 @@ export const ChatHeader = ({
 
 
 ==== src\components\ChatInput.tsx ====
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send } from "lucide-react";
@@ -1070,11 +1284,27 @@ import { Send } from "lucide-react";
 interface ChatInputProps {
   onSendMessage: (text: string) => void; // <- solo texto
   disabled?: boolean;
+  inputRef?: React.RefObject<HTMLTextAreaElement>; // ADD
 }
 
-export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
+export const ChatInput = ({ onSendMessage, disabled, inputRef }: ChatInputProps) => {
   const [message, setMessage] = useState("");
+  const [showCodeHint, setShowCodeHint] = useState(false); // ADD
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Detectar patrón de código de curso (ADD-ONLY)
+  useEffect(() => {
+    const courseCodePattern = /^R-[A-Z]{3}-\d+$/i;
+    const trimmedMessage = message.trim();
+    setShowCodeHint(courseCodePattern.test(trimmedMessage));
+  }, [message]);
+
+  // Foco externo desde CapinChat (ADD-ONLY)
+  useEffect(() => {
+    if (inputRef?.current) {
+      inputRef.current.focus();
+    }
+  }, [inputRef]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1110,7 +1340,7 @@ export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
         <div className="flex gap-2 items-end">
           <div className="flex-1 relative">
             <Textarea
-              ref={textareaRef}
+              ref={inputRef || textareaRef}
               value={message}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
@@ -1119,6 +1349,22 @@ export const ChatInput = ({ onSendMessage, disabled }: ChatInputProps) => {
               className="min-h-[44px] max-h-[120px] resize-none pr-12 border-2 focus:border-primary transition-colors"
               rows={1}
             />
+            
+            {/* Tooltip no intrusivo para códigos de curso (ADD-ONLY) */}
+            {showCodeHint && !disabled && (
+              <div 
+                className="absolute left-0 top-full mt-1 text-xs bg-primary/90 text-primary-foreground rounded-md px-2 py-1 shadow-md z-10 pointer-events-none select-none animate-in fade-in-0 zoom-in-95 duration-200"
+                role="tooltip"
+                aria-label="Información sobre búsqueda de curso"
+              >
+                <div className="flex items-center gap-1">
+                  <span>🎯</span>
+                  <span>Encontraré el curso aunque no esté en esta página</span>
+                </div>
+                {/* Pequeña flecha apuntando al input */}
+                <div className="absolute -top-1 left-3 w-2 h-2 bg-primary/90 rotate-45 transform"></div>
+              </div>
+            )}
           </div>
 
           <Button
@@ -1273,7 +1519,7 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
 ==== src\components\ChatWidget.tsx ====
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { MessageCircle, X } from "lucide-react";
+import { MessageCircle } from "lucide-react";
 import capinMascot from "@/assets/capin-mascot.png";
 import { CapinChat } from "./CapinChat";
 
@@ -1333,22 +1579,12 @@ const ChatWidget = () => {
     <div className="fixed inset-x-2 bottom-2 md:inset-auto md:right-6 md:bottom-6 z-[60]">
       <div className="relative mx-auto md:mx-0 w-full [width:min(92vw,440px)]">
         <div className="bg-white border border-border rounded-xl shadow-2xl w-full h-[70vh] max-h-[80vh] md:h-[600px] overflow-hidden">
-          <div className="absolute right-2 top-2 z-10">
-            <Button
-              aria-label="Cerrar chat"
-              variant="ghost"
-              size="icon"
-              onClick={() => setOpen(false)}
-              className="h-8 w-8 cursor-pointer text-white"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
           <CapinChat
             className="h-full max-w-none w-full"
             apiEndpoint={import.meta.env.VITE_API_ENDPOINT}
             sessionScope="guest"
             showWelcome={true}
+            onClose={() => setOpen(false)}
           />
         </div>
       </div>
