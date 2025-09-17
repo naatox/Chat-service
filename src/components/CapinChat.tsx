@@ -16,7 +16,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { useIsMobile } from "@/hooks/use-mobile"; 
 
-type AppRole = "tms" | "publico" | "alumno" | "relator";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
 interface ChatApiMeta {
   total_cursos?: number;
@@ -91,6 +91,8 @@ export const CapinChat = ({
 
   const [selectedRole, setSelectedRole] = useState<AppRole>(initialRole);
   const [rut, setRut] = useState<string>("");
+  const [idCliente, setIdCliente] = useState<string>("");
+  const [correo, setCorreo] = useState<string>("");
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null); // ADD
@@ -192,7 +194,24 @@ export const CapinChat = ({
   const callChatAPI = async (question: string): Promise<ChatApiResponse> => {
     const shouldSendRut =
       (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
-    const claims = shouldSendRut ? { rut: rut.trim() } : undefined;
+    
+    const shouldSendClienteClaims =
+      selectedRole === "cliente" && 
+      rut.trim().length > 0 && 
+      idCliente.trim().length > 0 && 
+      correo.trim().length > 0;
+
+    let claims: Record<string, string> | undefined;
+    
+    if (shouldSendRut) {
+      claims = { rut: rut.trim() };
+    } else if (shouldSendClienteClaims) {
+      claims = { 
+        rut: rut.trim(), 
+        idCliente: idCliente.trim(), 
+        correo: correo.trim() 
+      };
+    }
 
     const userPayload: unknown = {
       sub: "",
@@ -240,6 +259,14 @@ export const CapinChat = ({
     const visibleText = display?.trim();
     const promptToSend = (actual ?? display)?.trim();
     if (!visibleText) return;
+
+    // Validar que los campos requeridos estén completos para el rol cliente
+    if (selectedRole === "cliente") {
+      if (!rut.trim() || !idCliente.trim() || !correo.trim()) {
+        alert("Por favor completa todos los campos requeridos: RUT, ID Cliente y Email");
+        return;
+      }
+    }
 
     if (courseCodePattern.test(visibleText)) {
       sendTelemetry("course_code_query", { 
@@ -326,10 +353,14 @@ export const CapinChat = ({
         onChangeRole={setSelectedRole}
         rut={rut}
         onChangeRut={setRut}
+        idCliente={idCliente}
+        onChangeIdCliente={setIdCliente}
+        correo={correo}
+        onChangeCorreo={setCorreo}
       />
 
-      {/* Sugeridas para alumno y relator */}
-      {(selectedRole === "alumno" || selectedRole === "relator") && (
+      {/* Sugeridas para alumno, relator y cliente */}
+      {(selectedRole === "alumno" || selectedRole === "relator" || selectedRole === "cliente") && (
         <SuggestedQuestions onAsk={handleSendMessage} role={selectedRole} isMobile={isMobile} />
       )}
 

@@ -56,12 +56,45 @@ const relatorQuestions = [
 
 ];
 
-export const SuggestedQuestions = ({ onAsk, role, isMobile = false }: Props) => {
-  // Solo mostrar para alumno y relator
-  if (role !== "alumno" && role !== "relator") return null;
+const clienteQuestions = [
+  {
+    label: "Mis inscripciones",
+    prompt:
+      "Muéstrame todas mis inscripciones activas y pasadas como cliente. Lista cada curso con estado y fechas.",
+  },
+  {
+    label: "Estado de pagos",
+    prompt:
+      "Muéstrame el estado de mis pagos pendientes y realizados. Incluye detalles de facturación si están disponibles.",
+  },
+  {
+    label: "Certificados disponibles",
+    prompt:
+      "Muéstrame los certificados que puedo descargar de los cursos completados. Lista por curso finalizado.",
+  },
+  {
+    label: "Próximos cursos",
+    prompt:
+      "Muéstrame los próximos cursos disponibles que puedo inscribir según mi perfil de cliente.",
+  },
+];
 
-  const questions = role === "alumno" ? alumnoQuestions : relatorQuestions;
-  const titleText = role === "alumno" ? "Preguntas rápidas" : "Consultas de relator";
+export const SuggestedQuestions = ({ onAsk, role, isMobile = false }: Props) => {
+  if (role !== "alumno" && role !== "relator" && role !== "cliente") return null;
+
+  let questions;
+  let titleText;
+  
+  if (role === "alumno") {
+    questions = alumnoQuestions;
+    titleText = "Preguntas rápidas";
+  } else if (role === "relator") {
+    questions = relatorQuestions;
+    titleText = "Consultas de relator";
+  } else if (role === "cliente") {
+    questions = clienteQuestions;
+    titleText = "Consultas de cliente";
+  }
 
   return (
     <div className="border-b bg-background/70">

@@ -13,7 +13,7 @@ import { X, Trash2, ChevronDown } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;
@@ -25,6 +25,10 @@ interface ChatHeaderProps {
   onChangeRole?: (r: AppRole) => void;
   rut?: string;
   onChangeRut?: (rut: string) => void;
+  idCliente?: string;
+  onChangeIdCliente?: (v: string) => void;
+  correo?: string;
+  onChangeCorreo?: (v: string) => void;
 }
 
 export const ChatHeader = ({
@@ -36,8 +40,13 @@ export const ChatHeader = ({
   onChangeRole,
   rut = "",
   onChangeRut,
+  idCliente = "",
+  onChangeIdCliente,
+  correo = "",
+  onChangeCorreo,
 }: ChatHeaderProps) => {
-  const showRut = userRole === "alumno" || userRole === "relator";
+  const showRut = userRole === "alumno" || userRole === "relator" || userRole === "cliente";
+  const showCli = userRole === "cliente";
 
   return (
     <div className="bg-gradient-primary text-white p-3 rounded-t-xl shadow-chat">
@@ -77,6 +86,7 @@ export const ChatHeader = ({
                     <SelectItem value="publico">Público</SelectItem>
                     <SelectItem value="alumno">Alumno</SelectItem>
                     <SelectItem value="relator">Relator</SelectItem>
+                    <SelectItem value="cliente">Cliente</SelectItem>
                     <SelectItem value="tms">TMS</SelectItem>
                   </SelectContent>
                 </Select>
@@ -92,6 +102,30 @@ export const ChatHeader = ({
                     className="h-7 w-[138px] sm:w-[150px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
                   />
                 </div>
+              )}
+
+              {showCli && (
+                <>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] text-white/80 whitespace-nowrap">ID Cliente:</span>
+                    <Input
+                      value={idCliente}
+                      onChange={(e) => onChangeIdCliente?.(e.target.value)}
+                      placeholder="CLI-001234"
+                      className="h-7 w-[138px] sm:w-[150px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] text-white/80 whitespace-nowrap">Email:</span>
+                    <Input
+                      type="email"
+                      value={correo}
+                      onChange={(e) => onChangeCorreo?.(e.target.value)}
+                      placeholder="cliente@dominio.cl"
+                      className="h-7 w-[180px] sm:w-[200px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                    />
+                  </div>
+                </>
               )}
             </div>
           </div>
