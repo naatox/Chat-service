@@ -14,7 +14,15 @@ import {
 } from "@/lib/chatStorage";
 import { useAuth } from "@/contexts/AuthContext";
 import { SuggestedQuestions } from "./SuggestedQuestions";
-import { useIsMobile } from "@/hooks/use-mobile"; 
+import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination"; 
 
 type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
@@ -191,7 +199,7 @@ export const CapinChat = ({
   };
 
   // === API ===
-  const callChatAPI = async (question: string): Promise<ChatApiResponse> => {
+  const callChatAPI = async (question: string, pageOverride?: number): Promise<ChatApiResponse> => {
     const shouldSendRut =
       (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
     
@@ -213,12 +221,24 @@ export const CapinChat = ({
       };
     }
 
+    // ADD: Filtros de paginación para cliente
+    let filters: Record<string, number> | undefined;
+    if (selectedRole === "cliente") {
+      const currentPage = pageOverride || page || 1;
+      const currentPageSize = pageSize || 10;
+      filters = {
+        page: currentPage,
+        page_size: currentPageSize
+      };
+    }
+
     const userPayload: unknown = {
       sub: "",
       role: selectedRole,
       session_id: sessionId,
       tenantId: "insecap",
       ...(claims ? { claims } : {}),
+      ...(filters ? { filters } : {}),
     };
 
     const res = await fetch(apiEndpoint, {
@@ -266,6 +286,141 @@ export const CapinChat = ({
         alert("Por favor completa todos los campos requeridos: RUT, ID Cliente y Email");
         return;
       }
+      
+      // ADD: Interceptar comandos de paginación para cliente
+      const pageCommand = promptToSend.toLowerCase();
+      
+      // Detectar "página X", "siguiente", "anterior"
+      const pageMatch = pageCommand.match(/^página?\s*(\d+)$/);
+      if (pageMatch) {
+        const targetPage = parseInt(pageMatch[1]);
+        if (targetPage > 0 && hasPagination && targetPage <= totalPages) {
+          sendTelemetry("page_nav", { 
+            page: targetPage, 
+            total_pages: totalPages,
+            session_scope: sessionScope 
+          });
+          const display = `→ Página ${targetPage}`;
+          const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+          // Reenviar la última query con la nueva página
+          setLastQuery(internal);
+          
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            text: display,
+            sender: "user",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, userMessage]);
+          setIsTyping(true);
+          
+          try {
+            const data = await callChatAPI(internal, targetPage);
+            setLastMeta(data.meta ?? null);
+            const assistantMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              text: data.answer ?? "",
+              sender: "assistant", 
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          } catch (error) {
+            setMessages((prev) => [...prev, {
+              id: (Date.now() + 1).toString(),
+              text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+              sender: "assistant",
+              timestamp: new Date(),
+            }]);
+          } finally {
+            setIsTyping(false);
+          }
+          return;
+        }
+      }
+      
+      if (pageCommand === "siguiente" && canNext) {
+        sendTelemetry("page_nav", { 
+          page: page + 1, 
+          total_pages: totalPages,
+          session_scope: sessionScope 
+        });
+        const display = `→ Página ${page + 1}`;
+        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+        
+        setLastQuery(internal);
+        const userMessage: Message = {
+          id: Date.now().toString(),
+          text: display,
+          sender: "user",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, userMessage]);
+        setIsTyping(true);
+        
+        try {
+          const data = await callChatAPI(internal, page + 1);
+          setLastMeta(data.meta ?? null);
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            text: data.answer ?? "",
+            sender: "assistant",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        } catch (error) {
+          setMessages((prev) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+            sender: "assistant",
+            timestamp: new Date(),
+          }]);
+        } finally {
+          setIsTyping(false);
+        }
+        return;
+      }
+      
+      if (pageCommand === "anterior" && canPrev) {
+        sendTelemetry("page_nav", { 
+          page: page - 1, 
+          total_pages: totalPages,
+          session_scope: sessionScope 
+        });
+        const display = `→ Página ${page - 1}`;
+        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+        
+        setLastQuery(internal);
+        const userMessage: Message = {
+          id: Date.now().toString(),
+          text: display,
+          sender: "user",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, userMessage]);
+        setIsTyping(true);
+        
+        try {
+          const data = await callChatAPI(internal, page - 1);
+          setLastMeta(data.meta ?? null);
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            text: data.answer ?? "",
+            sender: "assistant",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        } catch (error) {
+          setMessages((prev) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+            sender: "assistant",
+            timestamp: new Date(),
+          }]);
+        } finally {
+          setIsTyping(false);
+        }
+        return;
+      }
     }
 
     if (courseCodePattern.test(visibleText)) {
@@ -289,6 +444,8 @@ export const CapinChat = ({
 
     try {
       const data = await callChatAPI(promptToSend);
+      console.log("API response:", data);
+
       setLastMeta(data.meta ?? null);
 
       const assistantMessage: Message = {
@@ -323,7 +480,16 @@ export const CapinChat = ({
     });
     
     const display = `→ Página ${n}`;
-    const internal = `pagina ${n}`;
+    let internal;
+    
+    // Para cliente, reutilizar la última query manteniendo contexto
+    // Para alumno/relator, usar comando de página directo
+    if (selectedRole === "cliente") {
+      internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+    } else {
+      internal = `pagina ${n}`;
+    }
+    
     handleSendMessage(display, internal);
   };
 
@@ -381,40 +547,119 @@ export const CapinChat = ({
           {/* Chips de desambiguación después del último mensaje del asistente (ADD-ONLY) */}
           {!isTyping && lastAssistantMessage && renderDisambiguationChips(lastMeta?.citations)}
           
+          {/* Aviso de página para cliente después del último mensaje (ADD-ONLY) */}
+          {!isTyping && lastAssistantMessage && selectedRole === "cliente" && hasPagination && (
+            <div className="px-4 py-2 text-center">
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-50 text-blue-700 text-xs rounded-full border border-blue-200">
+                📄 Página {page} de {totalPages}
+                {total > 0 && (
+                  <span className="text-blue-600">
+                    • {showingCount} de {total} cursos
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          
           <div ref={messagesEndRef} />
         </div>
         
         {/* Hint bajo los listados (ADD-ONLY) */}
         {hasPagination && (
           <div className="px-4 py-3 text-xs text-muted-foreground border-t bg-background/80 backdrop-blur-sm">
-            💡 <strong>Tip:</strong> Para ver detalles de un curso específico, escribe su código (ej.: R-REC-214).
+            💡 <strong>Tip:</strong> 
+            {selectedRole === "cliente" 
+              ? "Escribe 'página 2', 'siguiente' o 'anterior' para navegar entre páginas."
+              : "Para ver detalles de un curso específico, escribe su código (ej.: R-REC-214)."
+            }
           </div>
         )}
       </div>
 
       {hasPagination && (
-        <div className="border-t bg-muted/50 px-3 py-2 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Página {page} / {totalPages} • Mostrando {showingCount} de {total}
-          </span>
-          <div className="flex gap-2">
-            <button
-              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
-              onClick={() => goToPage(page - 1)}
-              disabled={!canPrev || isTyping}
-              aria-label="Página anterior"
-            >
-              ← Anterior
-            </button>
-            <button
-              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
-              onClick={() => goToPage(page + 1)}
-              disabled={!canNext || isTyping}
-              aria-label="Página siguiente"
-            >
-              Siguiente →
-            </button>
+        <div className="border-t bg-muted/50 px-3 py-2">
+          <div className="flex items-center justify-between text-sm mb-2">
+            <span className="text-muted-foreground">
+              Página {page} de {totalPages} • Mostrando {showingCount} de {total}
+            </span>
           </div>
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious 
+                  onClick={() => goToPage(page - 1)}
+                  className={!canPrev || isTyping ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+              
+              {/* Mostrar números de página cuando hay pocas páginas */}
+              {totalPages <= 5 && Array.from({length: totalPages}, (_, i) => i + 1).map((pageNum) => (
+                <PaginationItem key={pageNum}>
+                  <PaginationLink
+                    onClick={() => goToPage(pageNum)}
+                    isActive={pageNum === page}
+                    className="cursor-pointer"
+                  >
+                    {pageNum}
+                  </PaginationLink>
+                </PaginationItem>
+              ))}
+              
+              {/* Para muchas páginas, mostrar página actual y adyacentes */}
+              {totalPages > 5 && (
+                <>
+                  {page > 2 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(1)} className="cursor-pointer">
+                        1
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  {page > 3 && <span className="text-muted-foreground">...</span>}
+                  
+                  {page > 1 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(page - 1)} className="cursor-pointer">
+                        {page - 1}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  <PaginationItem>
+                    <PaginationLink isActive className="cursor-pointer">
+                      {page}
+                    </PaginationLink>
+                  </PaginationItem>
+                  
+                  {page < totalPages && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(page + 1)} className="cursor-pointer">
+                        {page + 1}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  {page < totalPages - 2 && <span className="text-muted-foreground">...</span>}
+                  
+                  {page < totalPages - 1 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(totalPages)} className="cursor-pointer">
+                        {totalPages}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                </>
+              )}
+              
+              <PaginationItem>
+                <PaginationNext 
+                  onClick={() => goToPage(page + 1)}
+                  className={!canNext || isTyping ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
         </div>
       )}
 

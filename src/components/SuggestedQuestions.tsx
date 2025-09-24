@@ -24,14 +24,14 @@ const alumnoQuestions = [
       "Muéstrame mi asistencia (porcentaje y detalle si existe) del alumno actual. Resume por curso. No mezcles las notas con asistencia",
   },
   {
-    label: "Cursos inscritos (numerados)",
+    label: "Cursos inscritos",
     prompt: `Muéstrame mis cursos inscritos del alumno actual. 
 Devuelve ÚNICAMENTE el listado de cursos numerado (1., 2., 3., …), SIN incluir notas ni comentarios adicionales.
 Usa EXACTAMENTE este estilo:
 
-1. Nombre del curso 1
-2. Nombre del curso 2
-3. Nombre del curso 3
+1. Nombre del curso 1 + codigoUnico
+2. Nombre del curso 2 + codigoUnico
+3. Nombre del curso 3 + codigoUnico
 
 No agregues encabezados, ni texto extra; solo el listado numerado de cursos.`,
   },
@@ -58,14 +58,19 @@ const relatorQuestions = [
 
 const clienteQuestions = [
   {
-    label: "Mis inscripciones",
+    label: "Cursos inscritos",
     prompt:
-      "Muéstrame todas mis inscripciones activas y pasadas como cliente. Lista cada curso con estado y fechas.",
+      "Muéstrame todos mis cursos activos y pasados como cliente (página 1). Devuelve solo la página solicitada y adjunta meta de paginación.",
+  },
+  {
+    label: "Mis cursos",
+    prompt:
+      "Muéstrame todos mis cursos (comercializaciones) activos y pasados como cliente. Lista cada curso con: los nombres de los cursos con valor final en CLP, fechas (inicio y término con formato [día] de [mes] del [año]).",
   },
   {
     label: "Estado de pagos",
     prompt:
-      "Muéstrame el estado de mis pagos pendientes y realizados. Incluye detalles de facturación si están disponibles.",
+      "Muéstrame el estado comercial, indicado dentro de data antes de los contactos. En caso de que el estado sea distinto a Sin deudas: indícame por cada curso, solamente el nombre y el estado de pago de cada uno. Si hay pagos pendientes, indícalo claramente.",
   },
   {
     label: "Certificados disponibles",
