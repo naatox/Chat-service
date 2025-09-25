@@ -15,6 +15,7 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useSessionId } from "@/hooks/useSessionId";
 import {
   Pagination,
   PaginationContent,
@@ -22,7 +23,13 @@ import {
   PaginationLink,
   PaginationNext,
   PaginationPrevious,
-} from "@/components/ui/pagination"; 
+} from "@/components/ui/pagination";
+import { Button } from "@/components/ui/button";
+import { RotateCcw } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { TmsQuickActions, type TmsActionType } from "./TmsQuickActions";
+import { CourseCodeModal } from "./CourseCodeModal";
+import { generateTmsPrompt } from "@/lib/tmsPrompts"; 
 
 type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
@@ -73,34 +80,39 @@ const sendTelemetry = (event: string, data?: Record<string, unknown>) => {
 };
 
 export const CapinChat = ({
-  apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "https://rag-service-qgkc.onrender.com/api/chat",
+  apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:8000/api/chat",
   onError,
   className = "",
   onClose,
   showWelcome = true,
   sessionScope = "guest",
 }: CapinChatProps) => {
-  const [sessionId] = useState(() => {
-    const existing = loadSessionId(sessionScope);
-    if (existing) return existing;
-    const generated = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    saveSessionId(sessionScope, generated);
-    return generated;
-  });
+  // Hook para manejo de sesiones
+  const { sessionId, resetSession } = useSessionId();
+  const { toast } = useToast();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [isResettingSession, setIsResettingSession] = useState(false);
 
   const [lastMeta, setLastMeta] = useState<ChatApiMeta | null>(null);
   const [lastQuery, setLastQuery] = useState<string>("");
+
+  // ADD: Estados para TMS Quick Actions
+  const [isTmsModalOpen, setIsTmsModalOpen] = useState(false);
+  const [selectedTmsAction, setSelectedTmsAction] = useState<TmsActionType | null>(null);
 
   const { user } = useAuth();
   const initialRole: AppRole = (user?.role as AppRole) ?? "publico";
 
   const [selectedRole, setSelectedRole] = useState<AppRole>(initialRole);
+  
+  // ADD: Computed - verificar si es rol TMS (incluye "tms" base y "tms:*" con subroles)
+  const isTmsRole = selectedRole === 'tms' || selectedRole.startsWith('tms:');
   const [rut, setRut] = useState<string>("");
   const [idCliente, setIdCliente] = useState<string>("");
   const [correo, setCorreo] = useState<string>("");
+  const [tmsSubrol, setTmsSubrol] = useState<string>("coordinador"); // ADD: Estado para subrol TMS
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null); // ADD
@@ -232,21 +244,28 @@ export const CapinChat = ({
       };
     }
 
+    // ADD: Determinar el rol final a enviar al backend
+    const finalRole = selectedRole === "tms" ? `tms:${tmsSubrol}` : selectedRole;
+
     const userPayload: unknown = {
       sub: "",
-      role: selectedRole,
+      role: finalRole, // MODIFICADO: Usar finalRole que incluye formato "tms:subrol"
       session_id: sessionId,
       tenantId: "insecap",
       ...(claims ? { claims } : {}),
       ...(filters ? { filters } : {}),
     };
 
+    // Log para debugging del RAG backend
+    console.log(`Chat request received - role: ${finalRole}, raw_role: ${user?.role || 'undefined'}, session_id: ${sessionId}, message: ${question.substring(0, 50)}...`);
+
     const res = await fetch(apiEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: question,
-        role: selectedRole,
+        role: finalRole, // Enviar el rol correcto (con subroles tms:*)
+        session_id: sessionId, // Incluir session_id en el payload principal
         user: userPayload,
       }),
     });
@@ -274,6 +293,81 @@ export const CapinChat = ({
     setLastMeta(null);
     setLastQuery("");
   };
+
+  // ADD: Función para cambiar sesión
+  const handleResetSession = async () => {
+    setIsResettingSession(true);
+    
+    try {
+      // Generar nuevo session_id
+      const newSessionId = resetSession();
+      
+      // Limpiar historial visual (pero NO el backend)
+      setMessages([
+        {
+          id: "welcome",
+          text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
+          sender: "assistant",
+          timestamp: new Date(),
+        },
+      ]);
+      setLastMeta(null);
+      setLastQuery("");
+      
+      // Mostrar toast informativo
+      toast({
+        title: "Sesión cambiada",
+        description: `Nueva sesión: ${newSessionId.slice(0, 8)}... Los próximos 8 mensajes usarán contexto limpio.`,
+        duration: 3000,
+      });
+      
+      console.log(`[SESSION RESET] Nueva sesión generada: ${newSessionId}`);
+      
+    } catch (error) {
+      console.error("Error al cambiar sesión:", error);
+      toast({
+        title: "Error",
+        description: "No se pudo cambiar la sesión. Intenta de nuevo.",
+        variant: "destructive",
+        duration: 3000,
+      });
+    } finally {
+      // Deshabilitar input por 200ms para evitar dobles envíos
+      setTimeout(() => {
+        setIsResettingSession(false);
+      }, 200);
+    }
+  };
+
+  // ADD: Handlers para TMS Quick Actions
+  const handleTmsActionClick = (action: TmsActionType) => {
+    setSelectedTmsAction(action);
+    setIsTmsModalOpen(true);
+  };
+
+  const handleTmsConfirm = async (codigoCurso: string, tipo: TmsActionType) => {
+    const explicitPrompt = generateTmsPrompt(codigoCurso, tipo);
+    
+    // Log para debugging
+    console.log(`[TMS ACTION] ${tipo} para curso: ${codigoCurso}`);
+    console.log(`[TMS PROMPT] ${explicitPrompt.substring(0, 100)}...`);
+    
+    // Enviar el mensaje con el prompt explícito generado
+    await handleSendMessage(`Consultar ${tipo}: ${codigoCurso}`, explicitPrompt);
+  };
+
+  // ADD: Atajo de teclado Ctrl+K para R11
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'k' && isTmsRole) {
+        e.preventDefault();
+        handleTmsActionClick('R11');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTmsRole]);
 
   const handleSendMessage = async (display: string, actual?: string) => {
     const visibleText = display?.trim();
@@ -516,6 +610,8 @@ export const CapinChat = ({
         userRole={selectedRole}
         onClose={onClose}
         onClear={handleClearChat}
+        onResetSession={handleResetSession} // ADD: Callback para cambiar sesión
+        isResettingSession={isResettingSession} // ADD: Estado para deshabilitar controles
         onChangeRole={setSelectedRole}
         rut={rut}
         onChangeRut={setRut}
@@ -523,7 +619,18 @@ export const CapinChat = ({
         onChangeIdCliente={setIdCliente}
         correo={correo}
         onChangeCorreo={setCorreo}
+        tmsSubrol={tmsSubrol}
+        onChangeTmsSubrol={setTmsSubrol}
       />
+
+      {/* ADD: Acciones TMS - Solo para roles tms:* */}
+      {isTmsRole && (
+        <TmsQuickActions 
+          onActionClick={handleTmsActionClick}
+          disabled={isTyping || isResettingSession}
+          isMobile={isMobile}
+        />
+      )}
 
       {/* Sugeridas para alumno, relator y cliente */}
       {(selectedRole === "alumno" || selectedRole === "relator" || selectedRole === "cliente") && (
@@ -663,10 +770,33 @@ export const CapinChat = ({
         </div>
       )}
 
+      {/* ADD: Tag "Modo TMS" encima del input */}
+      {isTmsRole && (
+        <div className="px-3 py-1 bg-blue-50 border-t border-blue-200">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+            <span className="text-xs font-medium text-blue-700">
+              Modo TMS • Ctrl+K para R11
+            </span>
+          </div>
+        </div>
+      )}
+
       <ChatInput 
         onSendMessage={(text) => handleSendMessage(text)} 
-        disabled={isTyping} 
+        disabled={isTyping || isResettingSession} 
         inputRef={inputRef}
+      />
+
+      {/* ADD: Modal para código de curso TMS */}
+      <CourseCodeModal
+        isOpen={isTmsModalOpen}
+        onClose={() => {
+          setIsTmsModalOpen(false);
+          setSelectedTmsAction(null);
+        }}
+        onConfirm={handleTmsConfirm}
+        actionType={selectedTmsAction}
       />
     </div>
   );

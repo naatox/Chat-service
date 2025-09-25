@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Manual - CapinIA Session Management</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .test-case { border: 1px solid #ccc; margin: 10px 0; padding: 15px; border-radius: 5px; }
+        .test-case.pass { border-color: #28a745; background: #d4edda; }
+        .test-case.fail { border-color: #dc3545; background: #f8d7da; }
+        .test-case.pending { border-color: #ffc107; background: #fff3cd; }
+        .code { background: #f4f4f4; padding: 10px; border-radius: 3px; font-family: monospace; }
+        .button { background: #007bff; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; }
+        .button:hover { background: #0056b3; }
+        h1, h2 { color: #333; }
+        .status { font-weight: bold; }
+        .pass { color: #28a745; }
+        .fail { color: #dc3545; }
+        .pending { color: #ffc107; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Tests Manuales - Gestión de Sesiones CapinIA</h1>
+    
+    <h2>Instrucciones</h2>
+    <p>Ejecuta estos tests manualmente para verificar la funcionalidad de cambio de sesión.</p>
+    
+    <div class="test-case pending" id="test-1">
+        <h3>Test 1: Verificar Hook useSessionId</h3>
+        <div class="status pending">🟡 PENDIENTE</div>
+        <p><strong>Objetivo:</strong> Verificar que el hook genera y gestiona session_id correctamente</p>
+        
+        <h4>Pasos:</h4>
+        <ol>
+            <li>Abrir DevTools Console</li>
+            <li>Ejecutar: <code class="code">localStorage.getItem('rag_session_id')</code></li>
+            <li>Verificar que existe un UUID válido</li>
+            <li>Ejecutar: <code class="code">localStorage.setItem('rag_session_id', 'test-session-123')</code></li>
+            <li>Recargar la página</li>
+            <li>Verificar que el chat mantiene el session_id 'test-session-123'</li>
+        </ol>
+        
+        <h4>Resultado Esperado:</h4>
+        <ul>
+            <li>✅ localStorage contiene 'rag_session_id' con formato UUID</li>
+            <li>✅ Session ID se mantiene entre recargas</li>
+            <li>✅ Hook usa session_id existente o genera uno nuevo</li>
+        </ul>
+        
+        <button class="button" onclick="markTest('test-1', 'pass')">✅ PASS</button>
+        <button class="button" onclick="markTest('test-1', 'fail')">❌ FAIL</button>
+    </div>
+
+    <div class="test-case pending" id="test-2">
+        <h3>Test 2: Botón Cambiar Sesión</h3>
+        <div class="status pending">🟡 PENDIENTE</div>
+        <p><strong>Objetivo:</strong> Verificar que el botón de cambiar sesión funciona correctamente</p>
+        
+        <h4>Pasos:</h4>
+        <ol>
+            <li>Abrir el chat de CapinIA</li>
+            <li>Enviar un mensaje cualquiera (ej: "hola")</li>
+            <li>Anotar el session_id actual: <code class="code">localStorage.getItem('rag_session_id')</code></li>
+            <li>Hacer click en el botón de cambiar sesión (icono RotateCcw)</li>
+            <li>Verificar que aparece toast: "Sesión cambiada: ..."</li>
+            <li>Verificar nuevo session_id en localStorage</li>
+            <li>Verificar que el historial visual se limpió</li>
+            <li>Enviar otro mensaje y verificar que usa el nuevo session_id</li>
+        </ol>
+        
+        <h4>Resultado Esperado:</h4>
+        <ul>
+            <li>✅ Toast informativo aparece</li>
+            <li>✅ Session ID cambia en localStorage</li>
+            <li>✅ Historial visual se limpia</li>
+            <li>✅ Controles se deshabilitan por 200ms</li>
+            <li>✅ Próximo mensaje usa nuevo session_id</li>
+        </ul>
+        
+        <button class="button" onclick="markTest('test-2', 'pass')">✅ PASS</button>
+        <button class="button" onclick="markTest('test-2', 'fail')">❌ FAIL</button>
+    </div>
+
+    <div class="test-case pending" id="test-3">
+        <h3>Test 3: Payload API con Session ID</h3>
+        <div class="status pending">🟡 PENDIENTE</div>
+        <p><strong>Objetivo:</strong> Verificar que el payload enviado al backend incluye session_id</p>
+        
+        <h4>Pasos:</h4>
+        <ol>
+            <li>Abrir DevTools → Network → filtrar "chat"</li>
+            <li>Seleccionar rol "TMS" → área "Logística"</li>
+            <li>Enviar mensaje "test de session"</li>
+            <li>Inspeccionar el request en Network tab</li>
+            <li>Verificar el JSON payload en Request body</li>
+        </ol>
+        
+        <h4>Resultado Esperado:</h4>
+        <div class="code">
+{
+  "message": "test de session",
+  "role": "tms:logística",
+  "session_id": "&lt;uuid&gt;",
+  "user": {
+    "sub": "",
+    "role": "tms:logística", 
+    "session_id": "&lt;uuid&gt;",
+    "tenantId": "insecap"
+  }
+}
+        </div>
+        
+        <ul>
+            <li>✅ session_id presente en payload principal</li>
+            <li>✅ session_id presente en user payload</li>
+            <li>✅ role preserva subroles exactos (tms:logística)</li>
+            <li>✅ Console log: "Chat request received - role: tms:logística..."</li>
+        </ul>
+        
+        <button class="button" onclick="markTest('test-3', 'pass')">✅ PASS</button>
+        <button class="button" onclick="markTest('test-3', 'fail')">❌ FAIL</button>
+    </div>
+
+    <div class="test-case pending" id="test-4">
+        <h3>Test 4: Preservación de Roles TMS</h3>
+        <div class="status pending">🟡 PENDIENTE</div>
+        <p><strong>Objetivo:</strong> Verificar que los subroles tms:* no se colapsan</p>
+        
+        <h4>Pasos:</h4>
+        <ol>
+            <li>Probar cada área TMS: coordinador, comercial, postcurso, facturación, logística, administrador, gerencia, diseño&desarrollo, diseño</li>
+            <li>Para cada área, enviar un mensaje</li>
+            <li>Verificar en Network que el role es "tms:&lt;area&gt;"</li>
+            <li>Verificar console log correcto</li>
+        </ol>
+        
+        <h4>Resultado Esperado:</h4>
+        <ul>
+            <li>✅ "tms:coordinador", "tms:comercial", etc. (no solo "tms")</li>
+            <li>✅ Cada subrole se envía exactamente como se seleccionó</li>
+            <li>✅ Sin normalización/colapso de subroles</li>
+        </ul>
+        
+        <button class="button" onclick="markTest('test-4', 'pass')">✅ PASS</button>
+        <button class="button" onclick="markTest('test-4', 'fail')">❌ FAIL</button>
+    </div>
+
+    <h2>📊 Resumen de Tests</h2>
+    <div id="summary">
+        <p>Total: 4 tests | <span class="pending" id="pending-count">4 Pendientes</span> | <span class="pass" id="pass-count">0 Pasaron</span> | <span class="fail" id="fail-count">0 Fallaron</span></p>
+    </div>
+
+    <h2>🔧 Debugging Tips</h2>
+    <div class="code">
+// En DevTools Console - Verificar session_id
+localStorage.getItem('rag_session_id')
+
+// Generar nuevo session_id manualmente  
+crypto.randomUUID()
+
+// Limpiar session_id para probar desde cero
+localStorage.removeItem('rag_session_id')
+
+// Ver todos los datos de localStorage
+Object.keys(localStorage).forEach(key => {
+    console.log(key, localStorage.getItem(key));
+});
+    </div>
+
+    <script>
+        let testResults = {
+            'test-1': 'pending',
+            'test-2': 'pending', 
+            'test-3': 'pending',
+            'test-4': 'pending'
+        };
+
+        function markTest(testId, result) {
+            testResults[testId] = result;
+            
+            const testElement = document.getElementById(testId);
+            const statusElement = testElement.querySelector('.status');
+            
+            testElement.className = 'test-case ' + result;
+            
+            if (result === 'pass') {
+                statusElement.innerHTML = '<span class="pass">✅ PASS</span>';
+                statusElement.className = 'status pass';
+            } else if (result === 'fail') {
+                statusElement.innerHTML = '<span class="fail">❌ FAIL</span>';
+                statusElement.className = 'status fail';
+            }
+            
+            updateSummary();
+        }
+
+        function updateSummary() {
+            const pending = Object.values(testResults).filter(r => r === 'pending').length;
+            const pass = Object.values(testResults).filter(r => r === 'pass').length;
+            const fail = Object.values(testResults).filter(r => r === 'fail').length;
+            
+            document.getElementById('pending-count').textContent = `${pending} Pendientes`;
+            document.getElementById('pass-count').textContent = `${pass} Pasaron`;
+            document.getElementById('fail-count').textContent = `${fail} Fallaron`;
+        }
+
+        // Log inicial para debugging
+        console.log('=== CapinIA Session Management Tests ===');
+        console.log('Session ID actual:', localStorage.getItem('rag_session_id'));
+        console.log('Crypto UUID disponible:', typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function');
+        console.log('Ejecuta los tests manualmente y marca los resultados en la página.');
+    </script>
+</body>
+</html>
