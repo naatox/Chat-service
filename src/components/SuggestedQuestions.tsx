@@ -10,6 +10,7 @@ type Props = {
   onAsk: (display: string, actual?: string) => void;
   role?: string;
   isMobile?: boolean;
+  disabled?: boolean;
 };
 
 const alumnoQuestions = [
@@ -84,7 +85,7 @@ const clienteQuestions = [
   },
 ];
 
-export const SuggestedQuestions = ({ onAsk, role, isMobile = false }: Props) => {
+export const SuggestedQuestions = ({ onAsk, role, isMobile = false, disabled = false }: Props) => {
   if (role !== "alumno" && role !== "relator" && role !== "cliente") return null;
 
   let questions;
@@ -119,7 +120,8 @@ export const SuggestedQuestions = ({ onAsk, role, isMobile = false }: Props) => 
                   variant="outline"
                   size="sm"
                   onClick={() => onAsk(q.label, q.prompt)}
-                  className="rounded-full"
+                  disabled={disabled}
+                  className="rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {q.label}
                 </Button>

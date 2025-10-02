@@ -634,7 +634,12 @@ export const CapinChat = ({
 
       {/* Sugeridas para alumno, relator y cliente */}
       {(selectedRole === "alumno" || selectedRole === "relator" || selectedRole === "cliente") && (
-        <SuggestedQuestions onAsk={handleSendMessage} role={selectedRole} isMobile={isMobile} />
+        <SuggestedQuestions 
+          onAsk={handleSendMessage} 
+          role={selectedRole} 
+          isMobile={isMobile} 
+          disabled={isTyping || isResettingSession}
+        />
       )}
 
       {/* Contenedor de mensajes */}
