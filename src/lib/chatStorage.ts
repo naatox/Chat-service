@@ -6,6 +6,21 @@ export type SerializableMessage = {
   files?: unknown;
 };
 
+// Función auxiliar para generar UUID con fallback
+const generateUUID = (): string => {
+  // Intentar usar crypto.randomUUID si está disponible
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  
+  // Fallback: generar UUID v4 manualmente
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 const NAMESPACE = 'capin:chat';
 
 export const storageKeys = {
@@ -57,7 +72,7 @@ export function clearSession(scope: string) {
 export function clearChat(sessionId: string) {
   try {
     const welcomeMsg: SerializableMessage = {
-            id: crypto.randomUUID(),
+            id: generateUUID(),
             text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
             sender: "assistant",
             timestamp: new Date().toISOString(),

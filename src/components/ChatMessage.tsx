@@ -3,6 +3,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Copy, Check, ExternalLink } from "lucide-react";
 import capinMascot from "@/assets/capin-mascot.png";
+import { RelatorResult } from "@/features/tms/RelatorResult";
+import { CostosResult } from "@/features/tms/CostosResult";
 
 export interface Message {
   id: string;
@@ -14,9 +16,10 @@ export interface Message {
 
 interface ChatMessageProps {
   message: Message;
+  onRelatorSelect?: (rut: string) => void;
 }
 
-export const ChatMessage = ({ message }: ChatMessageProps) => {
+export const ChatMessage = ({ message, onRelatorSelect }: ChatMessageProps) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -26,6 +29,79 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
   };
 
   const isUser = message.sender === "user";
+
+  // Detectar si el contenido del asistente incluye información de relatores
+  const isRelatorContent = !isUser && (
+    message.text.includes("Relator encontrado") ||
+    message.text.includes("Relatores encontrados") ||
+    message.text.includes("múltiples coincidencias") ||
+    message.text.includes("Encontré varias coincidencias") ||
+    /\d{1,2}\.\d{3}\.\d{3}[-.][\dKk]/.test(message.text) // Detectar RUTs en el contenido
+  );
+
+  // Detectar si el contenido del asistente incluye información de costos
+  const isCostosContent = !isUser && (
+    message.text.includes("COSTOS") ||
+    message.text.includes("COSTO TOTAL") ||
+    message.text.includes("PRECIO VENTA") ||
+    message.text.includes("Honorarios") ||
+    message.text.includes("===") ||
+    message.text.includes("Costos by codigoComer")
+  );
+
+  // Si es contenido de relatores, usar RelatorResult
+  if (isRelatorContent && onRelatorSelect) {
+    return (
+      <div className={`flex gap-3 p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-8 h-8 border-2 border-primary/20">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[80%] text-left">
+          <div className="inline-block p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <RelatorResult content={message.text} onRelatorSelect={onRelatorSelect} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Si es contenido de costos, usar CostosResult
+  if (isCostosContent) {
+    return (
+      <div className={`flex gap-3 p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-8 h-8 border-2 border-primary/20">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[80%] text-left">
+          <div className="inline-block p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <CostosResult content={message.text} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Regex para detectar URLs (capturando las coincidencias)
   const linkRegex = /(https?:\/\/[^\s]+)/g;
@@ -45,7 +121,7 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
 
     // Luego cierres de paréntesis/corchetes/llaves solo si están desbalanceados
     const pairs: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-    const endCloser = /[)\]\}]$/;
+    const endCloser = /[)\]}]$/;
 
     const count = (s: string, ch: string) => (s.match(new RegExp("\\" + ch, "g")) || []).length;
 

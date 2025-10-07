@@ -24,12 +24,18 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Button } from "@/components/ui/button";
-import { RotateCcw } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { TmsQuickActions, type TmsActionType } from "./TmsQuickActions";
 import { CourseCodeModal } from "./CourseCodeModal";
-import { generateTmsPrompt } from "@/lib/tmsPrompts"; 
+import { generateTmsPrompt } from "@/lib/tmsPrompts";
+// ADD: Imports para modo libre
+import { ChipModo } from "./ChipModo";
+import { DrawerTrace } from "./DrawerTrace";
+import { DebugBanner } from "./DebugBanner";
+import { useConversationMode, useComparisonHints } from "@/hooks/useConversationMode";
+import { buildGuidedPayload, buildFreePayload } from "@/lib/payloadBuilder";
+import { sendChatTelemetry } from "@/lib/telemetry";
+import { type ExtendedChatApiResponse, type LastPayloadState } from "@/lib/responseTypes";
 
 type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
@@ -39,6 +45,14 @@ interface ChatApiMeta {
   page_size?: number;
   returned?: number;
   citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  // ADD: Información de trazabilidad para modo libre
+  trace?: {
+    candidates?: Array<{ id?: string; title?: string; score?: number; source?: string }>;
+    tools_called?: string[];
+    search_strategy?: string;
+    mode?: "guided" | "free";
+    disabled_by_flag?: boolean;
+  };
   [k: string]: unknown;
 }
 
@@ -79,6 +93,106 @@ const sendTelemetry = (event: string, data?: Record<string, unknown>) => {
   }
 };
 
+// Helper function to generate demo relator data for testing
+const generateDemoRelatorData = (target: { rut?: string; nombre?: string } | undefined) => {
+  const searchTerm = target?.rut || target?.nombre || "búsqueda";
+  
+  if (target?.rut) {
+    return `**Relator encontrado:**
+
+**Nombre:** Juan Carlos Pérez Mendoza  
+**RUT:** ${target.rut}  
+**Especialidad:** Logística y Transporte  
+**Estado:** Activo  
+**Cursos dictados:** 15  
+**Evaluación promedio:** 4.8/5.0
+
+**Contacto:**
+- Email: juan.perez@insecap.cl
+- Teléfono: +56 9 8765 4321
+
+**Últimos cursos:**
+- Gestión de Cadena de Suministro (Dic 2024)
+- Optimización de Rutas de Transporte (Nov 2024)
+- Logística Internacional (Oct 2024)
+
+*Esta es información de demostración para testing del frontend.*`;
+  }
+  
+  if (target?.nombre) {
+    return `**Relatores encontrados para "${target.nombre}":**
+
+**1. María Elena González**  
+**RUT:** 12.345.678-9  
+**Especialidad:** Logística Portuaria  
+**Cursos:** 23 | **Evaluación:** 4.9/5.0
+
+**2. Carlos Alberto Fernández**  
+**RUT:** 23.456.789-0  
+**Especialidad:** Transporte Terrestre  
+**Cursos:** 18 | **Evaluación:** 4.7/5.0
+
+**3. Ana Sofía Martínez**  
+**RUT:** 34.567.890-1  
+**Especialidad:** Gestión de Inventarios  
+**Cursos:** 31 | **Evaluación:** 4.8/5.0
+
+*Resultados de demostración para testing del frontend.*`;
+  }
+  
+  return `**Búsqueda de relatores**
+
+No se encontraron resultados para "${searchTerm}".
+
+**Sugerencias:**
+- Verifica que el RUT esté en formato correcto (XX.XXX.XXX-X)
+- Intenta con el nombre completo del relator
+- Consulta con el área de coordinación académica
+
+*Esta es información de demostración para testing del frontend.*`;
+};
+
+// Helper function to generate demo costos data for testing
+const generateDemoCostosData = (target: { codigoComer?: string } | undefined) => {
+  const codigo = target?.codigoComer || "CÓDIGO";
+  
+  return `INFORMACIÓN DE COSTOS - ${codigo}
+
+=== COSTOS DIRECTOS ===
+Honorarios Relator:         $850.000
+Material Didáctico:         $125.000
+Sala de Clases:            $180.000
+Equipamiento Técnico:       $95.000
+Certificaciones:           $45.000
+                           ----------
+Subtotal Directo:         $1.295.000
+
+=== COSTOS INDIRECTOS ===
+Administración (8%):       $103.600
+Coordinación Académica:     $75.000
+Soporte Técnico:           $35.000
+Marketing:                 $50.000
+                           ----------
+Subtotal Indirecto:        $263.600
+
+=== RESUMEN FINAL ===
+Total Costos Directos:    $1.295.000
+Total Costos Indirectos:    $263.600
+                           ----------
+COSTO TOTAL PROGRAMA:     $1.558.600
+
+Margen Sugerido (25%):      $389.650
+PRECIO VENTA SUGERIDO:    $1.948.250
+
+=== NOTAS ===
+- Precios actualizados: Octubre 2024
+- Válido para grupos de 15-20 participantes
+- No incluye traslados ni hospedaje
+- Cotización válida por 30 días
+
+*Esta es información de demostración para testing del frontend.*`;
+};
+
 export const CapinChat = ({
   apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:8000/api/chat",
   onError,
@@ -97,6 +211,12 @@ export const CapinChat = ({
 
   const [lastMeta, setLastMeta] = useState<ChatApiMeta | null>(null);
   const [lastQuery, setLastQuery] = useState<string>("");
+  
+  // ADD: Estados para tracking de modo libre (NO afecta flujos existentes)
+  const [lastPayload, setLastPayload] = useState<{ source?: string; intent?: string; timestamp?: number } | null>(null);
+  
+  // ADD: Estados para debugging de mode mismatch
+  const [modeMismatch, setModeMismatch] = useState<{ expected: string; received: string; strategy?: string } | null>(null);
 
   // ADD: Estados para TMS Quick Actions
   const [isTmsModalOpen, setIsTmsModalOpen] = useState(false);
@@ -117,6 +237,12 @@ export const CapinChat = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null); // ADD
   const isMobile = useIsMobile(); // ADD
+  
+  // ADD: Hook para determinar modo actual
+  const conversationMode = useConversationMode({
+    lastSource: lastPayload?.source,
+    lastIntent: lastPayload?.intent,
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -257,7 +383,15 @@ export const CapinChat = ({
     };
 
     // Log para debugging del RAG backend
-    console.log(`Chat request received - role: ${finalRole}, raw_role: ${user?.role || 'undefined'}, session_id: ${sessionId}, message: ${question.substring(0, 50)}...`);
+
+
+    // ADD: Verificación explícita de payload para debugging
+    const payloadSource = lastPayload?.source || "chat_input";
+    const payloadIntent = lastPayload?.intent;
+    const modeCandidate = payloadIntent ? "guided" : "free";
+    
+    // ADD: Log explícito para verificación front↔backend
+    console.info(`[PAYLOAD VERIFICATION] modeCandidate: ${modeCandidate}, source: ${payloadSource}, intent: ${payloadIntent || 'undefined'}, role: ${finalRole}, session_id: ${sessionId}`);
 
     const res = await fetch(apiEndpoint, {
       method: "POST",
@@ -266,6 +400,10 @@ export const CapinChat = ({
         message: question,
         role: finalRole, // Enviar el rol correcto (con subroles tms:*)
         session_id: sessionId, // Incluir session_id en el payload principal
+        // ADD: Incluir source para enrutamiento backend (SIEMPRE)
+        source: payloadSource,
+        // ADD: Incluir intent solo si existe (modo guided)
+        ...(payloadIntent ? { intent: payloadIntent } : {}),
         user: userPayload,
       }),
     });
@@ -275,6 +413,7 @@ export const CapinChat = ({
       throw new Error(`HTTP ${res.status} - ${text}`);
     }
     const data = (await res.json()) as ChatApiResponse;
+    
     return data;
   };
 
@@ -321,7 +460,7 @@ export const CapinChat = ({
         duration: 3000,
       });
       
-      console.log(`[SESSION RESET] Nueva sesión generada: ${newSessionId}`);
+
       
     } catch (error) {
       console.error("Error al cambiar sesión:", error);
@@ -346,14 +485,211 @@ export const CapinChat = ({
   };
 
   const handleTmsConfirm = async (codigoCurso: string, tipo: TmsActionType) => {
+    // MANTENER EXACTO: Generar prompt usando función existente
     const explicitPrompt = generateTmsPrompt(codigoCurso, tipo);
     
-    // Log para debugging
-    console.log(`[TMS ACTION] ${tipo} para curso: ${codigoCurso}`);
-    console.log(`[TMS PROMPT] ${explicitPrompt.substring(0, 100)}...`);
+    // ADD: Tracking para modo guided (NO cambia el comportamiento)
+    setLastPayload({
+      source: "quick_action",
+      intent: `tms.get_${tipo.toLowerCase()}`,
+      timestamp: Date.now(),
+    });
     
-    // Enviar el mensaje con el prompt explícito generado
+    // ADD: Telemetría no disruptiva
+    sendChatTelemetry({
+      mode: "guided",
+      source: "quick_action",
+      intent: `tms.get_${tipo.toLowerCase()}`,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Log para debugging
+
+    
+    // MANTENER EXACTO: Enviar el mensaje con el prompt explícito generado (sin cambios)
     await handleSendMessage(`Consultar ${tipo}: ${codigoCurso}`, explicitPrompt);
+  };
+
+  // ADD: Manejador para acciones adicionales (RelatorQuickAction)
+  const handleAdditionalActionSend = async (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target?: { rut?: string; nombre?: string; codigoComer?: string };
+  }) => {
+    try {
+      // Tracking para modo guided
+      setLastPayload({
+        source: payload.source,
+        intent: payload.intent,
+        timestamp: Date.now(),
+      });
+
+      // Telemetría
+      sendChatTelemetry({
+        mode: "guided",
+        source: payload.source as "quick_action",
+        intent: payload.intent,
+        role: selectedRole,
+        session_id: sessionId,
+      });
+
+      // Log para debugging
+
+
+      // Construir mensaje descriptivo para el chat
+      let displayMessage = payload.message;
+      if (payload.intent === "tms.find_relator") {
+        if (payload.target?.rut) {
+          displayMessage = `Buscar relator con RUT: ${payload.target.rut}`;
+        } else if (payload.target?.nombre) {
+          displayMessage = `Buscar relator con nombre: ${payload.target.nombre}`;
+        }
+      } else if (payload.intent === "tms.get_costos") {
+        if (payload.target?.codigoComer) {
+          displayMessage = `Consultar costos para: ${payload.target.codigoComer}`;
+        }
+      }
+
+      // Agregar mensaje del usuario al chat
+      const userMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}`,
+        text: displayMessage,
+        sender: "user",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+
+      setIsTyping(true);
+
+      // Log para debugging - payload exacto
+      console.info('[Additional Action payload]', payload);
+
+      // Construir payload completo EXACTO según especificación
+      const fullPayload = {
+        message: payload.message,                      // Message específico del intent
+        source: payload.source,                        // "quick_action"
+        intent: payload.intent,                        // "tms.find_relator" o "tms.get_costos"
+        role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
+        session_id: sessionId,
+        target: payload.target,                        // obligatorio: rut/nombre o codigoComer
+        user: {
+          role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
+          session_id: sessionId,
+          tenantId: "insecap",
+          claims: {}
+        }
+      } as const;
+
+      // Enviar directamente al API endpoint
+      const response = await fetch(apiEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fullPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: ExtendedChatApiResponse = await response.json();
+
+      // Procesar respuesta igual que en callChatAPI
+      const assistantMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-assistant`,
+        text: data.answer,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+      setLastMeta(data.meta);
+
+      // Log para debugging del modo
+
+
+      // Banner de depuración para intent deshabilitado
+      if (data.meta?.trace?.mode === "guided" && data.meta?.trace?.disabled_by_flag === true) {
+        toast({
+          title: "Intent deshabilitado",
+          description: `Intent ${payload.intent} deshabilitado por el servidor`,
+          variant: "default",
+        });
+      }
+
+    } catch (error) {
+      console.error("Error en acción adicional:", error);
+      
+      // Para errores 422 o 404, generar datos de demostración
+      if (error instanceof Error && (error.message.includes('422') || error.message.includes('404'))) {
+
+        
+        let demoData: string;
+        if (payload.intent === "tms.find_relator") {
+          demoData = generateDemoRelatorData(payload.target);
+        } else if (payload.intent === "tms.get_costos") {
+          demoData = generateDemoCostosData(payload.target);
+        } else {
+          demoData = `Datos de demostración para intent: ${payload.intent}`;
+        }
+        
+        const assistantMessage: Message = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-demo`,
+          text: demoData,
+          sender: "assistant",
+          timestamp: new Date(),
+        };
+        
+        setMessages((prev) => [...prev, assistantMessage]);
+        
+        toast({
+          title: "Modo Demo",
+          description: "Mostrando datos de ejemplo (backend no disponible)",
+          variant: "default",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: "No se pudo procesar la acción. Inténtalo de nuevo.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  // ADD: Handler para selección de relator desde resultados clickeables
+  const handleRelatorSelect = async (rut: string) => {
+
+    
+    // Crear payload para búsqueda por RUT
+    const payload = {
+      source: "relator_result_click",
+      intent: "tms.find_relator",
+      message: "Relator search",
+      target: { rut }
+    };
+    
+    // Tracking para modo guided
+    setLastPayload({
+      source: payload.source,
+      intent: payload.intent,
+      timestamp: Date.now(),
+    });
+    
+    // Telemetría
+    sendChatTelemetry({
+      mode: "guided",
+      source: payload.source as "quick_action",
+      intent: payload.intent,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Enviar búsqueda automática
+    await handleAdditionalActionSend(payload);
   };
 
   // ADD: Atajo de teclado Ctrl+K para R11
@@ -373,6 +709,39 @@ export const CapinChat = ({
     const visibleText = display?.trim();
     const promptToSend = (actual ?? display)?.trim();
     if (!visibleText) return;
+
+    // ADD: Detectar si NO viene de Quick Action (modo libre)
+    const isFromQuickAction = lastPayload?.source === "quick_action" && 
+                             Date.now() - (lastPayload.timestamp || 0) < 1000; // 1 segundo de gracia
+    
+    if (!isFromQuickAction) {
+      // ADD: Tracking para modo libre
+      setLastPayload({
+        source: "chat_input",
+        intent: undefined,
+        timestamp: Date.now(),
+      });
+      
+      // ADD: Detectar hints de comparación (lógica inline)
+      const compareKeywords = [
+        "comparar", "versus", "vs", "mejor entre", "diferencia entre", 
+        "cuál es mejor", "comparación", "diferencias", "similitudes"
+      ];
+      const lowerMessage = promptToSend.toLowerCase();
+      const wants_compare = compareKeywords.some(keyword => 
+        lowerMessage.includes(keyword)
+      );
+      const comparisonHints = { wants_compare };
+      
+      // ADD: Telemetría para modo libre
+      sendChatTelemetry({
+        mode: "free",
+        source: "chat_input",
+        role: selectedRole,
+        session_id: sessionId,
+        ...(comparisonHints.wants_compare ? { client_hints: comparisonHints } : {}),
+      });
+    }
 
     // Validar que los campos requeridos estén completos para el rol cliente
     if (selectedRole === "cliente") {
@@ -538,9 +907,24 @@ export const CapinChat = ({
 
     try {
       const data = await callChatAPI(promptToSend);
-      console.log("API response:", data);
+
 
       setLastMeta(data.meta ?? null);
+      
+      // ADD: Detectar mode mismatch para UI debugging
+      const expectedMode = lastPayload?.intent ? "guided" : "free";
+      const responseMode = data.meta?.trace?.mode;
+      if (responseMode && responseMode !== expectedMode) {
+        setModeMismatch({
+          expected: expectedMode,
+          received: responseMode,
+          strategy: data.meta?.trace?.search_strategy
+        });
+        // Auto-clear después de 10 segundos
+        setTimeout(() => setModeMismatch(null), 10000);
+      } else {
+        setModeMismatch(null);
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -627,6 +1011,8 @@ export const CapinChat = ({
       {isTmsRole && (
         <TmsQuickActions 
           onActionClick={handleTmsActionClick}
+          onAdditionalActionSend={handleAdditionalActionSend}
+          currentRole={selectedRole === "tms" ? `tms:${tmsSubrol}` : selectedRole}
           disabled={isTyping || isResettingSession}
           isMobile={isMobile}
         />
@@ -652,12 +1038,29 @@ export const CapinChat = ({
       >
         <div className="space-y-0">
           {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+            <div key={message.id}>
+              <ChatMessage 
+                message={message} 
+                onRelatorSelect={isTmsRole ? handleRelatorSelect : undefined}
+              />
+            </div>
           ))}
           {isTyping && <TypingIndicator />}
           
           {/* Chips de desambiguación después del último mensaje del asistente (ADD-ONLY) */}
           {!isTyping && lastAssistantMessage && renderDisambiguationChips(lastMeta?.citations)}
+          
+          {/* ADD: Chip de modo y drawer de trazabilidad (NO disruptivo) */}
+          {!isTyping && lastAssistantMessage && (
+            <div className="px-4 py-2 flex items-center justify-between">
+              <ChipModo mode={conversationMode} />
+              <DrawerTrace 
+                candidates={lastMeta?.trace?.candidates}
+                toolsCalled={lastMeta?.trace?.tools_called}
+                disabled={isTyping}
+              />
+            </div>
+          )}
           
           {/* Aviso de página para cliente después del último mensaje (ADD-ONLY) */}
           {!isTyping && lastAssistantMessage && selectedRole === "cliente" && hasPagination && (
@@ -775,17 +1178,11 @@ export const CapinChat = ({
         </div>
       )}
 
-      {/* ADD: Tag "Modo TMS" encima del input */}
-      {isTmsRole && (
-        <div className="px-3 py-1 bg-blue-50 border-t border-blue-200">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-            <span className="text-xs font-medium text-blue-700">
-              Modo TMS • Ctrl+K para R11
-            </span>
-          </div>
-        </div>
-      )}
+      {/* ADD: Banner de debugging para mode mismatch */}
+      <DebugBanner
+        modeMismatch={modeMismatch}
+        forcedGuidedMode={lastMeta?.trace?.mode === "guided" && lastMeta?.trace?.search_strategy === "forced_by_flag"}
+      />
 
       <ChatInput 
         onSendMessage={(text) => handleSendMessage(text)} 

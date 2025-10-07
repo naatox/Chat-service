@@ -38,9 +38,7 @@ interface ChatHeaderProps {
 }
 
 export const ChatHeader = ({
-  isMinimized,
   userRole = "publico",
-  onToggleMinimize,
   onClose,
   onClear,
   onResetSession,
@@ -59,17 +57,16 @@ export const ChatHeader = ({
   const showCli = userRole === "cliente";
   const showTms = userRole === "tms";
 
-  // ADD: Opciones de área TMS
   const tmsSubrolOptions = [
     { value: "coordinador", label: "Coordinador" },
     { value: "comercial", label: "Comercial" },
     { value: "postcurso", label: "Postcurso" },
-    { value: "facturación", label: "Facturación" },
-    { value: "logística", label: "Logística" },
+    { value: "facturacion", label: "Facturación" },
+    { value: "logistica", label: "Logística" },
     { value: "administrador", label: "Administrador" },
     { value: "gerencia", label: "Gerencia" },
-    { value: "diseño&desarrollo", label: "Diseño & Desarrollo" },
-    { value: "diseño", label: "Diseño" },
+    { value: "diseno&desarrollo", label: "Diseño & Desarrollo" },
+    { value: "diseno", label: "Diseño" },
   ];
 
   return (

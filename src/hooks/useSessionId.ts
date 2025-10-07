@@ -1,11 +1,26 @@
 import { useState, useEffect, useCallback } from 'react';
 
+// Función auxiliar para generar UUID con fallback
+const generateUUID = (): string => {
+  // Intentar usar crypto.randomUUID si está disponible
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  
+  // Fallback: generar UUID v4 manualmente
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 export const useSessionId = () => {
   const [sessionId, setSessionId] = useState<string>('');
 
-  // Generar un nuevo session_id usando crypto.randomUUID
+  // Generar un nuevo session_id usando crypto.randomUUID con fallback
   const generateSessionId = useCallback((): string => {
-    const newId = crypto.randomUUID();
+    const newId = generateUUID();
     return newId;
   }, []);
 

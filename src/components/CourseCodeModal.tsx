@@ -75,12 +75,12 @@ export const CourseCodeModal = ({
       return;
     }
 
-    // Patrón flexible: P-OPE-1012, ES-COM-1352, EA-TEC-001, etc.
-    const pattern = /^[A-Z]{1,2}-[A-Z]{3,4}-\d{3,6}$/;
+    // Patrón flexible: P-OPE-1012, ES-COM-1352, EA-TEC-001, ES-COM-12, P-OPE-1, etc.
+    const pattern = /^[A-Z]{1,2}-[A-Z]{3,4}-\d{1,6}$/;
     const valid = pattern.test(codigoCurso.trim().toUpperCase());
     
     setIsValid(valid);
-    setError(valid ? '' : 'Formato: P-OPE-1012 (ej: ES-COM-1352, EA-TEC-001)');
+    setError(valid ? '' : 'Formato: P-OPE-1012 (ej: ES-COM-1352, EA-TEC-001, P-OPE-12, ES-COM-1)');
   }, [codigoCurso]);
 
   const handleConfirm = () => {
@@ -147,7 +147,7 @@ export const CourseCodeModal = ({
           </div>
 
           <div className="text-xs text-muted-foreground bg-gray-50 p-2 rounded">
-            <strong>Ejemplos válidos:</strong> ES-COM-1352, P-OPE-1012, EA-TEC-001
+            <strong>Ejemplos válidos:</strong> ES-COM-1352, P-OPE-1012, EA-TEC-001, P-OPE-12, ES-COM-1
           </div>
         </div>
 
