@@ -13,7 +13,7 @@ import { X, Trash2, ChevronDown, RotateCcw } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente" | "logistica";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;

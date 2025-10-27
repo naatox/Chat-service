@@ -2,16 +2,23 @@ import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Send } from "lucide-react";
+import { ContextMenu, type ContextObject } from "./ContextMenu";
+import { ContextCard } from "./ContextCard";
+
+// ✅ Re-exportar ContextObject para que pueda ser usado en otros componentes
+export type { ContextObject };
 
 interface ChatInputProps {
-  onSendMessage: (text: string) => void; // <- solo texto
+  onSendMessage: (text: string, contexts?: ContextObject[]) => void; // ✅ Ahora acepta contextos
   disabled?: boolean;
-  inputRef?: React.RefObject<HTMLTextAreaElement>; // ADD
+  inputRef?: React.RefObject<HTMLTextAreaElement>;
+  showContextMenu?: boolean; // ✅ Para mostrar el botón "+" solo en rol TMS
 }
 
-export const ChatInput = ({ onSendMessage, disabled, inputRef }: ChatInputProps) => {
+export const ChatInput = ({ onSendMessage, disabled, inputRef, showContextMenu = false }: ChatInputProps) => {
   const [message, setMessage] = useState("");
-  const [showCodeHint, setShowCodeHint] = useState(false); // ADD
+  const [showCodeHint, setShowCodeHint] = useState(false);
+  const [contexts, setContexts] = useState<ContextObject[]>([]); // ✅ Estado para contextos
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Detectar patrón de código de curso (ADD-ONLY)
@@ -28,12 +35,24 @@ export const ChatInput = ({ onSendMessage, disabled, inputRef }: ChatInputProps)
     }
   }, [inputRef]);
 
+  // ✅ Handlers para contextos
+  const handleAddContext = (context: ContextObject) => {
+    if (contexts.length < 5) {
+      setContexts(prev => [...prev, context]);
+    }
+  };
+
+  const handleRemoveContext = (id: string) => {
+    setContexts(prev => prev.filter(c => c.id !== id));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     if (message.trim()) {
-      onSendMessage(message.trim());
+      onSendMessage(message.trim(), contexts.length > 0 ? contexts : undefined);
       setMessage("");
+      setContexts([]); // ✅ Limpiar contextos después de enviar
 
       if (textareaRef.current) {
         textareaRef.current.style.height = "auto";
@@ -59,7 +78,30 @@ export const ChatInput = ({ onSendMessage, disabled, inputRef }: ChatInputProps)
   return (
     <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <form onSubmit={handleSubmit} className="p-4">
+        {/* ✅ Display de contextos agregados */}
+        {contexts.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {contexts.map(ctx => (
+              <ContextCard 
+                key={ctx.id} 
+                context={ctx} 
+                onRemove={handleRemoveContext} 
+              />
+            ))}
+          </div>
+        )}
+
         <div className="flex gap-2 items-end">
+          {/* ✅ Botón de contexto (solo para TMS) */}
+          {showContextMenu && (
+            <ContextMenu 
+              onAddContext={handleAddContext} 
+              disabled={disabled}
+              contextCount={contexts.length}
+              maxContexts={5}
+            />
+          )}
+
           <div className="flex-1 relative">
             <Textarea
               ref={inputRef || textareaRef}

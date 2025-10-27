@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { ChatHeader } from "./ChatHeader";
 import { ChatMessage, type Message } from "./ChatMessage";
-import { ChatInput } from "./ChatInput";
+import { ChatInput, type ContextObject } from "./ChatInput";
 import { TypingIndicator } from "./TypingIndicator";
 import {
   clearChat,
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/pagination";
 import { useToast } from "@/hooks/use-toast";
 import { TmsQuickActions, type TmsActionType } from "./TmsQuickActions";
+import { AlumnoQuickActions } from "@/features/alumno";
 import { CourseCodeModal } from "./CourseCodeModal";
 import { generateTmsPrompt } from "@/lib/tmsPrompts";
 // ADD: Imports para modo libre
@@ -37,7 +38,7 @@ import { buildGuidedPayload, buildFreePayload } from "@/lib/payloadBuilder";
 import { sendChatTelemetry } from "@/lib/telemetry";
 import { type ExtendedChatApiResponse, type LastPayloadState } from "@/lib/responseTypes";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente" | "logistica";
 
 interface ChatApiMeta {
   total_cursos?: number;
@@ -93,104 +94,20 @@ const sendTelemetry = (event: string, data?: Record<string, unknown>) => {
   }
 };
 
-// Helper function to generate demo relator data for testing
-const generateDemoRelatorData = (target: { rut?: string; nombre?: string } | undefined) => {
-  const searchTerm = target?.rut || target?.nombre || "búsqueda";
+// Helper function to clean answer format (remove "Respuesta:" and "Fuentes:")
+const cleanAnswerFormat = (answer: string): string => {
+  let cleanAnswer = answer;
   
-  if (target?.rut) {
-    return `**Relator encontrado:**
-
-**Nombre:** Juan Carlos Pérez Mendoza  
-**RUT:** ${target.rut}  
-**Especialidad:** Logística y Transporte  
-**Estado:** Activo  
-**Cursos dictados:** 15  
-**Evaluación promedio:** 4.8/5.0
-
-**Contacto:**
-- Email: juan.perez@insecap.cl
-- Teléfono: +56 9 8765 4321
-
-**Últimos cursos:**
-- Gestión de Cadena de Suministro (Dic 2024)
-- Optimización de Rutas de Transporte (Nov 2024)
-- Logística Internacional (Oct 2024)
-
-*Esta es información de demostración para testing del frontend.*`;
-  }
+  // Quitar "Respuesta: " del inicio
+  cleanAnswer = cleanAnswer.replace(/^Respuesta:\s*/i, '');
   
-  if (target?.nombre) {
-    return `**Relatores encontrados para "${target.nombre}":**
-
-**1. María Elena González**  
-**RUT:** 12.345.678-9  
-**Especialidad:** Logística Portuaria  
-**Cursos:** 23 | **Evaluación:** 4.9/5.0
-
-**2. Carlos Alberto Fernández**  
-**RUT:** 23.456.789-0  
-**Especialidad:** Transporte Terrestre  
-**Cursos:** 18 | **Evaluación:** 4.7/5.0
-
-**3. Ana Sofía Martínez**  
-**RUT:** 34.567.890-1  
-**Especialidad:** Gestión de Inventarios  
-**Cursos:** 31 | **Evaluación:** 4.8/5.0
-
-*Resultados de demostración para testing del frontend.*`;
-  }
+  // Quitar sección de "Fuentes:" y todo lo que viene después
+  cleanAnswer = cleanAnswer.replace(/\s*Fuentes?:[\s\S]*$/i, '');
   
-  return `**Búsqueda de relatores**
-
-No se encontraron resultados para "${searchTerm}".
-
-**Sugerencias:**
-- Verifica que el RUT esté en formato correcto (XX.XXX.XXX-X)
-- Intenta con el nombre completo del relator
-- Consulta con el área de coordinación académica
-
-*Esta es información de demostración para testing del frontend.*`;
-};
-
-// Helper function to generate demo costos data for testing
-const generateDemoCostosData = (target: { codigoComer?: string } | undefined) => {
-  const codigo = target?.codigoComer || "CÓDIGO";
+  // Limpiar espacios en blanco al final
+  cleanAnswer = cleanAnswer.trim();
   
-  return `INFORMACIÓN DE COSTOS - ${codigo}
-
-=== COSTOS DIRECTOS ===
-Honorarios Relator:         $850.000
-Material Didáctico:         $125.000
-Sala de Clases:            $180.000
-Equipamiento Técnico:       $95.000
-Certificaciones:           $45.000
-                           ----------
-Subtotal Directo:         $1.295.000
-
-=== COSTOS INDIRECTOS ===
-Administración (8%):       $103.600
-Coordinación Académica:     $75.000
-Soporte Técnico:           $35.000
-Marketing:                 $50.000
-                           ----------
-Subtotal Indirecto:        $263.600
-
-=== RESUMEN FINAL ===
-Total Costos Directos:    $1.295.000
-Total Costos Indirectos:    $263.600
-                           ----------
-COSTO TOTAL PROGRAMA:     $1.558.600
-
-Margen Sugerido (25%):      $389.650
-PRECIO VENTA SUGERIDO:    $1.948.250
-
-=== NOTAS ===
-- Precios actualizados: Octubre 2024
-- Válido para grupos de 15-20 participantes
-- No incluye traslados ni hospedaje
-- Cotización válida por 30 días
-
-*Esta es información de demostración para testing del frontend.*`;
+  return cleanAnswer;
 };
 
 export const CapinChat = ({
@@ -214,6 +131,9 @@ export const CapinChat = ({
   
   // ADD: Estados para tracking de modo libre (NO afecta flujos existentes)
   const [lastPayload, setLastPayload] = useState<{ source?: string; intent?: string; timestamp?: number } | null>(null);
+  
+  // ADD: Estado para tracking del último intent de cliente (para paginación)
+  const [lastClienteIntent, setLastClienteIntent] = useState<{ intent: string; label: string } | null>(null);
   
   // ADD: Estados para debugging de mode mismatch
   const [modeMismatch, setModeMismatch] = useState<{ expected: string; received: string; strategy?: string } | null>(null);
@@ -337,7 +257,11 @@ export const CapinChat = ({
   };
 
   // === API ===
-  const callChatAPI = async (question: string, pageOverride?: number): Promise<ChatApiResponse> => {
+  const callChatAPI = async (
+    question: string, 
+    pageOverride?: number, 
+    contexts?: ContextObject[]
+  ): Promise<ChatApiResponse> => {
     const shouldSendRut =
       (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
     
@@ -347,7 +271,7 @@ export const CapinChat = ({
       idCliente.trim().length > 0 && 
       correo.trim().length > 0;
 
-    let claims: Record<string, string> | undefined;
+    let claims: Record<string, string | Array<{ type: string; identifier: string }>> | undefined; // ✅ Tipo para incluir objects
     
     if (shouldSendRut) {
       claims = { rut: rut.trim() };
@@ -356,6 +280,19 @@ export const CapinChat = ({
         rut: rut.trim(), 
         idCliente: idCliente.trim(), 
         correo: correo.trim() 
+      };
+    }
+
+    // ✅ Agregar objects de contexto a claims si existen
+    if (contexts && contexts.length > 0) {
+      const objects = contexts.map(ctx => ({
+        type: ctx.type,
+        identifier: ctx.identifier
+      }));
+      
+      claims = {
+        ...(claims || {}),
+        objects
       };
     }
 
@@ -388,10 +325,15 @@ export const CapinChat = ({
     // ADD: Verificación explícita de payload para debugging
     const payloadSource = lastPayload?.source || "chat_input";
     const payloadIntent = lastPayload?.intent;
-    const modeCandidate = payloadIntent ? "guided" : "free";
+    
+    // ✅ Determinar intent: si viene de chat_input y no hay intent previo, usar free_mode
+    const isFromQuickAction = payloadSource === "quick_action";
+    const effectiveIntent = isFromQuickAction ? payloadIntent : "free_mode";
+    
+    const modeCandidate = effectiveIntent ? "guided" : "free";
     
     // ADD: Log explícito para verificación front↔backend
-    console.info(`[PAYLOAD VERIFICATION] modeCandidate: ${modeCandidate}, source: ${payloadSource}, intent: ${payloadIntent || 'undefined'}, role: ${finalRole}, session_id: ${sessionId}`);
+    console.info(`[PAYLOAD VERIFICATION] modeCandidate: ${modeCandidate}, source: ${payloadSource}, intent: ${effectiveIntent || 'undefined'}, role: ${finalRole}, session_id: ${sessionId}, contexts: ${contexts?.length || 0}`);
 
     const res = await fetch(apiEndpoint, {
       method: "POST",
@@ -402,8 +344,8 @@ export const CapinChat = ({
         session_id: sessionId, // Incluir session_id en el payload principal
         // ADD: Incluir source para enrutamiento backend (SIEMPRE)
         source: payloadSource,
-        // ADD: Incluir intent solo si existe (modo guided)
-        ...(payloadIntent ? { intent: payloadIntent } : {}),
+        // ✅ Incluir intent: free_mode para chat_input, o el intent específico para quick_action
+        ...(effectiveIntent ? { intent: effectiveIntent } : {}),
         user: userPayload,
       }),
     });
@@ -516,7 +458,7 @@ export const CapinChat = ({
     source: string;
     intent: string;
     message: string;
-    target?: { rut?: string; nombre?: string; codigoComer?: string };
+    target?: { rut?: string; nombre?: string; codigoComer?: string; codigoCotizacion?: string; pkCotizacion?: string };
   }) => {
     try {
       // Tracking para modo guided
@@ -566,14 +508,32 @@ export const CapinChat = ({
       // Log para debugging - payload exacto
       console.info('[Additional Action payload]', payload);
 
+      // Construir claims para cliente
+      const shouldSendClienteClaims = 
+        selectedRole === "cliente" && 
+        rut.trim().length > 0 && 
+        idCliente.trim().length > 0 && 
+        correo.trim().length > 0;
+
+      const clienteClaims = shouldSendClienteClaims 
+        ? {
+            rut: rut.trim(),
+            idCliente: idCliente.trim(),
+            correo: correo.trim()
+          }
+        : undefined;
+
       // Construir payload completo EXACTO según especificación
       const fullPayload = {
         message: payload.message,                      // Message específico del intent
-        source: payload.source,                        // "quick_action"
-        intent: payload.intent,                        // "tms.find_relator" o "tms.get_costos"
         role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
+        org_id: "insecap",                             // Organización
+        mode: "guided",                                // Modo guided para intents
+        intent: payload.intent,                        // "cliente.get_diploma" o "tms.find_relator"
         session_id: sessionId,
+        source: payload.source,                        // "quick_action"
         target: payload.target,                        // obligatorio: rut/nombre o codigoComer
+        ...(clienteClaims ? { claims: clienteClaims } : {}),  // Claims para cliente
         user: {
           role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
           session_id: sessionId,
@@ -595,10 +555,22 @@ export const CapinChat = ({
 
       const data: ExtendedChatApiResponse = await response.json();
 
+      // Limpiar formato de respuesta (quitar "Respuesta:" y "Fuentes:")
+      let cleanAnswer = data.answer;
+      
+      // Quitar "Respuesta: " del inicio
+      cleanAnswer = cleanAnswer.replace(/^Respuesta:\s*/i, '');
+      
+      // Quitar sección de "Fuentes:" y todo lo que viene después
+      cleanAnswer = cleanAnswer.replace(/\s*Fuentes?:[\s\S]*$/i, '');
+      
+      // Limpiar espacios en blanco al final
+      cleanAnswer = cleanAnswer.trim();
+
       // Procesar respuesta igual que en callChatAPI
       const assistantMessage: Message = {
         id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-assistant`,
-        text: data.answer,
+        text: cleanAnswer,
         sender: "assistant",
         timestamp: new Date(),
       };
@@ -623,31 +595,7 @@ export const CapinChat = ({
       
       // Para errores 422 o 404, generar datos de demostración
       if (error instanceof Error && (error.message.includes('422') || error.message.includes('404'))) {
-
-        
-        let demoData: string;
-        if (payload.intent === "tms.find_relator") {
-          demoData = generateDemoRelatorData(payload.target);
-        } else if (payload.intent === "tms.get_costos") {
-          demoData = generateDemoCostosData(payload.target);
-        } else {
-          demoData = `Datos de demostración para intent: ${payload.intent}`;
-        }
-        
-        const assistantMessage: Message = {
-          id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-demo`,
-          text: demoData,
-          sender: "assistant",
-          timestamp: new Date(),
-        };
-        
-        setMessages((prev) => [...prev, assistantMessage]);
-        
-        toast({
-          title: "Modo Demo",
-          description: "Mostrando datos de ejemplo (backend no disponible)",
-          variant: "default",
-        });
+        const demoResponse = payload.intent === "tms.find_relator"
       } else {
         toast({
           title: "Error",
@@ -655,6 +603,116 @@ export const CapinChat = ({
           variant: "destructive",
         });
       }
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  // ADD: Handler específico para Quick Actions de Alumno
+  const handleAlumnoActionClick = async (intent: string, question: string) => {
+    try {
+      // Tracking para modo guided
+      setLastPayload({
+        source: "quick_action",
+        intent: intent,
+        timestamp: Date.now(),
+      });
+
+      // Telemetría
+      sendChatTelemetry({
+        mode: "guided",
+        source: "quick_action",
+        intent: intent,
+        role: selectedRole,
+        session_id: sessionId,
+      });
+
+      // Agregar mensaje del usuario al chat
+      const userMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}`,
+        text: question,
+        sender: "user",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+
+      setIsTyping(true);
+
+      // Construir payload con estructura específica para alumno
+      // El RUT debe venir del JWT (user.claims.rut) o del contexto de auth
+      const fullPayload = {
+        message: question,
+        role: selectedRole,  // "alumno"
+        intent: intent,      // "alumno.mis_datos", "alumno.ver_notas", etc.
+        session_id: sessionId,
+        source: "quick_action",
+        user: {
+          role: selectedRole,
+          session_id: sessionId,
+          tenantId: user?.tenantId ?? "insecap",
+          claims: {
+            rut: user?.claims?.rut ?? user?.sub ?? rut, // RUT del usuario autenticado
+            ...(user?.claims ?? {})
+          }
+        }
+      };
+
+      console.info('[Alumno Action payload]', fullPayload);
+
+      // Enviar al API endpoint
+      const response = await fetch(apiEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fullPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: ExtendedChatApiResponse = await response.json();
+
+      // Limpiar formato de respuesta
+      let cleanAnswer = data.answer;
+      cleanAnswer = cleanAnswer.replace(/^Respuesta:\s*/i, '');
+      cleanAnswer = cleanAnswer.replace(/\s*Fuentes?:[\s\S]*$/i, '');
+      cleanAnswer = cleanAnswer.trim();
+
+      // Agregar respuesta del asistente
+      const assistantMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-assistant`,
+        text: cleanAnswer,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+      setLastMeta(data.meta);
+
+      // Banner de depuración para intent deshabilitado
+      if (data.meta?.trace?.mode === "guided" && data.meta?.trace?.disabled_by_flag === true) {
+        toast({
+          title: "Intent deshabilitado",
+          description: `Intent ${intent} deshabilitado por el servidor`,
+          variant: "default",
+        });
+      }
+
+    } catch (error) {
+      console.error("Error en acción de alumno:", error);
+      
+      toast({
+        title: "Error",
+        description: "No se pudo procesar la acción. Inténtalo de nuevo.",
+        variant: "destructive",
+      });
+      
+      setMessages((prev) => [...prev, {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-error`,
+        text: "Lo siento, ocurrió un error al procesar tu solicitud. Por favor, intenta nuevamente.",
+        sender: "assistant",
+        timestamp: new Date(),
+      }]);
     } finally {
       setIsTyping(false);
     }
@@ -692,6 +750,174 @@ export const CapinChat = ({
     await handleAdditionalActionSend(payload);
   };
 
+  const handleParticipanteSelect = async (rut: string) => {
+    // Crear payload para búsqueda por RUT
+    const payload = {
+      source: "participante_result_click",
+      intent: "tms.find_participante",
+      message: "Participante search",
+      target: { rut }
+    };
+    
+    // Tracking para modo guided
+    setLastPayload({
+      source: payload.source,
+      intent: payload.intent,
+      timestamp: Date.now(),
+    });
+    
+    // Telemetría
+    sendChatTelemetry({
+      mode: "guided",
+      source: payload.source as "quick_action",
+      intent: payload.intent,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Enviar búsqueda automática
+    await handleAdditionalActionSend(payload);
+  };
+
+  const handleClienteIntentRequest = async (intent: string, label: string, pageOverride?: number) => {
+    // Agregar mensaje del usuario al chat
+    const userMessage: Message = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}`,
+      text: pageOverride ? `${label} - Página ${pageOverride}` : label,
+      sender: "user",
+      timestamp: new Date(),
+    };
+    setMessages((prev) => [...prev, userMessage]);
+
+    setIsTyping(true);
+
+    // Tracking para modo guided
+    setLastPayload({
+      source: "quick_action",
+      intent: intent,
+      timestamp: Date.now(),
+    });
+    
+    // Telemetría
+    sendChatTelemetry({
+      mode: "guided",
+      source: "quick_action",
+      intent: intent,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+
+    try {
+      // Construir payload según especificación del backend
+      const clienteIdNum = parseInt(idCliente) || 0;
+      
+      // Determinar la página actual
+      const currentPage = pageOverride || 1;
+      const currentPageSize = 10; // Default page size
+      
+      const fullPayload = {
+        message: label,  // Campo "message" en lugar de "question"
+        intent: intent,
+        role: "cliente",
+        claims: {
+          idCliente: clienteIdNum,
+          correo: correo.trim(),
+          org_id: "insecap"
+        },
+        target: {
+          role: "cliente",
+          filters: {
+            cliente_id: idCliente,
+            page: currentPage,
+            page_size: currentPageSize
+          }
+        }
+      };
+
+      console.info('[Cliente Intent Payload]', fullPayload);
+
+      // Enviar al API endpoint
+      const response = await fetch(apiEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fullPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: ExtendedChatApiResponse = await response.json();
+
+      // Guardar metadata para paginación (soportar tanto "metadata" como "meta")
+      const responseMetadata = data.metadata || data.meta;
+      if (responseMetadata) {
+        setLastMeta(responseMetadata);
+        console.info('[Cliente Intent Metadata]', responseMetadata);
+      }
+
+      // Guardar el último intent para paginación
+      setLastClienteIntent({ intent, label });
+
+      // Limpiar formato de respuesta
+      let cleanAnswer = data.answer;
+      cleanAnswer = cleanAnswer.replace(/^Respuesta:\s*/i, '');
+      cleanAnswer = cleanAnswer.replace(/\s*Fuentes?:[\s\S]*$/i, '');
+      cleanAnswer = cleanAnswer.trim();
+
+      // Procesar respuesta
+      const assistantMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-assistant`,
+        text: cleanAnswer,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+      setIsTyping(false);
+
+    } catch (error) {
+      console.error("Error en cliente intent request:", error);
+      const errorMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-error`,
+        text: `Error al procesar la solicitud: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+      setIsTyping(false);
+    }
+  };
+
+  const handleDiplomaRequest = async (rut: string) => {
+    // Crear payload para consulta de diploma
+    const payload = {
+      source: "quick_action",
+      intent: "cliente.get_diploma",
+      message: "Consultar Diploma",
+      target: { rut }
+    };
+    
+    // Tracking para modo guided
+    setLastPayload({
+      source: payload.source,
+      intent: payload.intent,
+      timestamp: Date.now(),
+    });
+    
+    // Telemetría
+    sendChatTelemetry({
+      mode: "guided",
+      source: payload.source as "quick_action",
+      intent: payload.intent,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Enviar búsqueda automática
+    await handleAdditionalActionSend(payload);
+  };
+
   // ADD: Atajo de teclado Ctrl+K para R11
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -705,7 +931,7 @@ export const CapinChat = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isTmsRole]);
 
-  const handleSendMessage = async (display: string, actual?: string) => {
+  const handleSendMessage = async (display: string, actual?: string, contexts?: ContextObject[]) => {
     const visibleText = display?.trim();
     const promptToSend = (actual ?? display)?.trim();
     if (!visibleText) return;
@@ -763,11 +989,66 @@ export const CapinChat = ({
             total_pages: totalPages,
             session_scope: sessionScope 
           });
-          const display = `→ Página ${targetPage}`;
-          const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
-          // Reenviar la última query con la nueva página
-          setLastQuery(internal);
           
+          // Si hay un último intent, usarlo para paginar
+          if (lastClienteIntent) {
+            handleClienteIntentRequest(lastClienteIntent.intent, lastClienteIntent.label, targetPage);
+          } else {
+            // Fallback a query normal
+            const display = `→ Página ${targetPage}`;
+            const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+            setLastQuery(internal);
+            
+            const userMessage: Message = {
+              id: Date.now().toString(),
+              text: display,
+              sender: "user",
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, userMessage]);
+            setIsTyping(true);
+            
+            try {
+              const data = await callChatAPI(internal, targetPage);
+              setLastMeta(data.meta ?? null);
+              const assistantMessage: Message = {
+                id: (Date.now() + 1).toString(),
+                text: cleanAnswerFormat(data.answer ?? ""),
+                sender: "assistant", 
+                timestamp: new Date(),
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            } catch (error) {
+              setMessages((prev) => [...prev, {
+                id: (Date.now() + 1).toString(),
+                text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+                sender: "assistant",
+                timestamp: new Date(),
+              }]);
+            } finally {
+              setIsTyping(false);
+            }
+          }
+          return;
+        }
+      }
+      
+      if (pageCommand === "siguiente" && canNext) {
+        sendTelemetry("page_nav", { 
+          page: page + 1, 
+          total_pages: totalPages,
+          session_scope: sessionScope 
+        });
+        
+        // Si hay un último intent, usarlo para paginar
+        if (lastClienteIntent) {
+          handleClienteIntentRequest(lastClienteIntent.intent, lastClienteIntent.label, page + 1);
+        } else {
+          // Fallback a query normal
+          const display = `→ Página ${page + 1}`;
+          const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+          
+          setLastQuery(internal);
           const userMessage: Message = {
             id: Date.now().toString(),
             text: display,
@@ -778,12 +1059,12 @@ export const CapinChat = ({
           setIsTyping(true);
           
           try {
-            const data = await callChatAPI(internal, targetPage);
+            const data = await callChatAPI(internal, page + 1);
             setLastMeta(data.meta ?? null);
             const assistantMessage: Message = {
               id: (Date.now() + 1).toString(),
-              text: data.answer ?? "",
-              sender: "assistant", 
+              text: cleanAnswerFormat(data.answer ?? ""),
+              sender: "assistant",
               timestamp: new Date(),
             };
             setMessages((prev) => [...prev, assistantMessage]);
@@ -797,48 +1078,6 @@ export const CapinChat = ({
           } finally {
             setIsTyping(false);
           }
-          return;
-        }
-      }
-      
-      if (pageCommand === "siguiente" && canNext) {
-        sendTelemetry("page_nav", { 
-          page: page + 1, 
-          total_pages: totalPages,
-          session_scope: sessionScope 
-        });
-        const display = `→ Página ${page + 1}`;
-        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
-        
-        setLastQuery(internal);
-        const userMessage: Message = {
-          id: Date.now().toString(),
-          text: display,
-          sender: "user",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, userMessage]);
-        setIsTyping(true);
-        
-        try {
-          const data = await callChatAPI(internal, page + 1);
-          setLastMeta(data.meta ?? null);
-          const assistantMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            text: data.answer ?? "",
-            sender: "assistant",
-            timestamp: new Date(),
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-        } catch (error) {
-          setMessages((prev) => [...prev, {
-            id: (Date.now() + 1).toString(),
-            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
-            sender: "assistant",
-            timestamp: new Date(),
-          }]);
-        } finally {
-          setIsTyping(false);
         }
         return;
       }
@@ -849,38 +1088,45 @@ export const CapinChat = ({
           total_pages: totalPages,
           session_scope: sessionScope 
         });
-        const display = `→ Página ${page - 1}`;
-        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
         
-        setLastQuery(internal);
-        const userMessage: Message = {
-          id: Date.now().toString(),
-          text: display,
-          sender: "user",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, userMessage]);
-        setIsTyping(true);
-        
-        try {
-          const data = await callChatAPI(internal, page - 1);
-          setLastMeta(data.meta ?? null);
-          const assistantMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            text: data.answer ?? "",
-            sender: "assistant",
+        // Si hay un último intent, usarlo para paginar
+        if (lastClienteIntent) {
+          handleClienteIntentRequest(lastClienteIntent.intent, lastClienteIntent.label, page - 1);
+        } else {
+          // Fallback a query normal
+          const display = `→ Página ${page - 1}`;
+          const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+          
+          setLastQuery(internal);
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            text: display,
+            sender: "user",
             timestamp: new Date(),
           };
-          setMessages((prev) => [...prev, assistantMessage]);
-        } catch (error) {
-          setMessages((prev) => [...prev, {
-            id: (Date.now() + 1).toString(),
-            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
-            sender: "assistant",
-            timestamp: new Date(),
-          }]);
-        } finally {
-          setIsTyping(false);
+          setMessages((prev) => [...prev, userMessage]);
+          setIsTyping(true);
+          
+          try {
+            const data = await callChatAPI(internal, page - 1);
+            setLastMeta(data.meta ?? null);
+            const assistantMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              text: cleanAnswerFormat(data.answer ?? ""),
+              sender: "assistant",
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          } catch (error) {
+            setMessages((prev) => [...prev, {
+              id: (Date.now() + 1).toString(),
+              text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+              sender: "assistant",
+              timestamp: new Date(),
+            }]);
+          } finally {
+            setIsTyping(false);
+          }
         }
         return;
       }
@@ -906,7 +1152,7 @@ export const CapinChat = ({
     setIsTyping(true);
 
     try {
-      const data = await callChatAPI(promptToSend);
+      const data = await callChatAPI(promptToSend, undefined, contexts); // ✅ Pasar contextos
 
 
       setLastMeta(data.meta ?? null);
@@ -928,7 +1174,7 @@ export const CapinChat = ({
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        text: data.answer ?? "",
+        text: cleanAnswerFormat(data.answer ?? ""),
         sender: "assistant",
         timestamp: new Date(),
       };
@@ -958,10 +1204,15 @@ export const CapinChat = ({
     });
     
     const display = `→ Página ${n}`;
-    let internal;
     
-    // Para cliente, reutilizar la última query manteniendo contexto
-    // Para alumno/relator, usar comando de página directo
+    // Para cliente con intent, usar el handler de intents con paginación
+    if (selectedRole === "cliente" && lastClienteIntent) {
+      handleClienteIntentRequest(lastClienteIntent.intent, lastClienteIntent.label, n);
+      return;
+    }
+    
+    // Para cliente sin intent, usar query normal
+    let internal;
     if (selectedRole === "cliente") {
       internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
     } else {
@@ -1018,13 +1269,24 @@ export const CapinChat = ({
         />
       )}
 
-      {/* Sugeridas para alumno, relator y cliente */}
-      {(selectedRole === "alumno" || selectedRole === "relator" || selectedRole === "cliente") && (
+      {/* ADD: Acciones Alumno - Reemplaza preguntas sugeridas para alumno */}
+      {selectedRole === "alumno" && (
+        <AlumnoQuickActions 
+          role={selectedRole}
+          onActionClick={handleAlumnoActionClick}
+          disabled={isTyping || isResettingSession}
+        />
+      )}
+
+      {/* Sugeridas solo para relator y cliente (alumno usa Quick Actions) */}
+      {(selectedRole === "relator" || selectedRole === "cliente") && (
         <SuggestedQuestions 
           onAsk={handleSendMessage} 
           role={selectedRole} 
           isMobile={isMobile} 
           disabled={isTyping || isResettingSession}
+          onDiplomaRequest={selectedRole === "cliente" ? handleDiplomaRequest : undefined}
+          onClienteIntentRequest={selectedRole === "cliente" ? handleClienteIntentRequest : undefined}
         />
       )}
 
@@ -1042,6 +1304,7 @@ export const CapinChat = ({
               <ChatMessage 
                 message={message} 
                 onRelatorSelect={isTmsRole ? handleRelatorSelect : undefined}
+                onParticipanteSelect={isTmsRole ? handleParticipanteSelect : undefined}
               />
             </div>
           ))}
@@ -1179,15 +1442,16 @@ export const CapinChat = ({
       )}
 
       {/* ADD: Banner de debugging para mode mismatch */}
-      <DebugBanner
+      {/* <DebugBanner
         modeMismatch={modeMismatch}
         forcedGuidedMode={lastMeta?.trace?.mode === "guided" && lastMeta?.trace?.search_strategy === "forced_by_flag"}
-      />
+      /> */}
 
       <ChatInput 
-        onSendMessage={(text) => handleSendMessage(text)} 
+        onSendMessage={(text, contexts) => handleSendMessage(text, undefined, contexts)} 
         disabled={isTyping || isResettingSession} 
         inputRef={inputRef}
+        showContextMenu={isTmsRole} // ✅ Mostrar botón "+" solo para TMS
       />
 
       {/* ADD: Modal para código de curso TMS */}

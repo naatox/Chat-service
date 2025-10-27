@@ -42,7 +42,7 @@ Quick Action "Relator" visible únicamente para el rol `tms:logistica`, que perm
   "session_id": "uuid...",
   "tenantId": "insecap",
   "target": { 
-    "rut": "12.345.678-9" // o "nombre": "Juan Pérez"
+    "rut": "[RUT del relator]" // o "nombre": "[Nombre del relator]"
   }
 }
 ```
@@ -51,34 +51,40 @@ Quick Action "Relator" visible únicamente para el rol `tms:logistica`, que perm
 
 **Card individual:**
 ```
-Nombre: Juan Pérez González
-RUT: 12.345.678-9
-Email: juan.perez@email.com
-Teléfono: +56912345678
+👨‍🏫 [Nombre Completo]
+RUT: [RUT del relator]
+Email: [email]
+Teléfono: [teléfono]
+Dirección: [dirección]
+Estado: [Vigente/Inactivo]
+Fecha creación: [fecha]
+id_relator: [ID] ← Requerido para botón "Ir a TMS"
+ID Contacto: [ID contacto]
 ```
 
 **Lista múltiple:**
 ```
-Encontré 3 coincidencias:
+Encontré [N] coincidencias:
 
-Juan Pérez González — 12.345.678-9
-María García López — 98.765.432-1  
-Carlos Rodríguez Silva — 11.222.333-4
+[Nombre Completo 1] — [RUT 1]
+[Nombre Completo 2] — [RUT 2]
+[Nombre Completo 3] — [RUT 3]
 ```
 
 ## 🎨 UX Features
 
-- **Formato automático de RUT**: `12345678-9` → `12.345.678-9`
+- **Formato automático de RUT**: Formatea automáticamente el RUT ingresado con puntos y guión
 - **Validación en tiempo real**: Botones habilitados solo con input válido
 - **Chips clicables**: Re-búsqueda automática al seleccionar de lista
+- **URLs clicables**: Detecta automáticamente URLs (http/https) en resultados y los convierte en enlaces
 - **Telemetría**: Tracking de método usado (rut/nombre)
 - **Error handling**: Toasts no bloqueantes para errores
 
 ## 🔒 Restricciones de Acceso
 
-- **Visible solo para**: `tms:logistica`
+- **Visible para**: `tms:logistica` y `tms:diseno&desarrollo`
 - **Registry pattern**: Otras acciones pueden agregarse sin modificar código existente
-- **No intrusivo**: Acciones TMS originales (R11/R12/R61/Bloques) inalteradas
+- **No intrusivo**: Acciones TMS originales (R11/R12/R61) inalteradas para otros roles
 
 ## 🧪 Testing
 
@@ -89,11 +95,12 @@ Carlos Rodríguez Silva — 11.222.333-4
 - ✅ Parsing de resultados estructurados vs no estructurados
 
 ### Para probar manualmente:
-1. Cambiar rol a `tms` → subrol `logistica`
+1. Cambiar rol a `tms` → subrol `logistica` o `diseno&desarrollo`
 2. Verificar que aparece botón "Relator" en Quick Actions
-3. Hacer búsqueda por RUT: `12345678-9`
-4. Hacer búsqueda por nombre: `Juan Pérez`
+3. Hacer búsqueda por RUT del relator
+4. Hacer búsqueda por nombre del relator
 5. Verificar payloads en DevTools → Network
+6. Al obtener resultado con `id_relator`, verificar que aparece botón "Ir a TMS"
 
 ## 📁 Estructura de archivos
 

@@ -20,7 +20,11 @@ export interface ExtendedChatApiMeta {
   total_cursos?: number;
   page?: number;
   page_size?: number;
+  total_pages?: number;
+  has_next?: boolean;
+  has_prev?: boolean;
   returned?: number;
+  intent?: string;
   citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
   trace?: TraceMeta; // Nueva: información de trazabilidad
   [k: string]: unknown;
@@ -34,6 +38,7 @@ export interface ExtendedChatApiResponse {
   latency_ms?: number | null;
   session_id?: string | null;
   meta?: ExtendedChatApiMeta; // Usar meta extendido
+  metadata?: ExtendedChatApiMeta; // Soporte para respuestas con "metadata" en lugar de "meta"
 }
 
 // Estado del último payload enviado (para tracking de modo)

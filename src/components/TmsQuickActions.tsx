@@ -30,10 +30,12 @@ export const TmsQuickActions = ({
   disabled = false, 
   isMobile = false 
 }: TmsQuickActionsProps) => {
-  // Para logística y diseño&desarrollo, solo mostrar botones personalizados
+  // Para logística, diseño&desarrollo, postcurso y comercial, ocultar botones originales
   const isLogistica = currentRole === "tms:logistica";
   const isDisenoDev = currentRole === "tms:diseno&desarrollo";
-  const shouldHideOriginalActions = isLogistica || isDisenoDev;
+  const isPostcurso = currentRole === "tms:postcurso";
+  const isComercial = currentRole === "tms:comercial";
+  const shouldHideOriginalActions = isLogistica || isDisenoDev || isPostcurso || isComercial;
   
   const actions = [
     {
@@ -80,7 +82,7 @@ export const TmsQuickActions = ({
             <div className="space-y-3">
               {/* Acciones originales TMS - Solo si NO es logística ni diseño&desarrollo */}
               {!shouldHideOriginalActions && (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {actions.map((action) => {
                     const Icon = action.icon;
                     return (
@@ -97,8 +99,8 @@ export const TmsQuickActions = ({
                         `}
                         title={action.description}
                       >
-                        <Icon className="h-4 w-4" />
-                        <span className="text-xs font-medium leading-tight">{action.label}</span>
+                        <Icon className="h-4 w-4 flex-shrink-0" />
+                        <span className="text-xs font-medium leading-tight text-center">{action.label}</span>
                       </Button>
                     );
                   })}
@@ -110,6 +112,7 @@ export const TmsQuickActions = ({
                 <AdditionalTmsActions
                   currentRole={currentRole}
                   onActionSend={onAdditionalActionSend}
+                  onActionClick={onActionClick}
                   disabled={disabled}
                 />
               )}

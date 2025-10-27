@@ -1,7 +1,7 @@
 import { TmsActionType } from "@/components/TmsQuickActions";
 import { generateTmsPrompt } from "@/lib/tmsPrompts";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente" | "logistica";
 
 // Payload base compartido
 interface BasePayload {

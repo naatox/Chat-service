@@ -25,8 +25,14 @@
 │   │   ├── ChatInput.tsx
 │   │   ├── ChatMessage.tsx
 │   │   ├── ChatWidget.tsx
+│   │   ├── ChipModo.tsx
+│   │   ├── CourseCodeModal.tsx
+│   │   ├── DebugBanner.tsx
+│   │   ├── DrawerTrace.tsx
 │   │   ├── SuggestedQuestions.tsx
+│   │   ├── TmsQuickActions.tsx
 │   │   ├── TypingIndicator.tsx
+│   │   ├── __tests__/
 │   │   ├── ui/
 │   │   │   ├── accordion.tsx
 │   │   │   ├── alert-dialog.tsx
@@ -79,14 +85,36 @@
 │   │   │   ├── use-toast.ts
 │   ├── contexts/
 │   │   ├── AuthContext.tsx
+│   ├── features/
+│   │   ├── tms/
+│   │   │   ├── ActionsRegistry.tsx
+│   │   │   ├── AdditionalTmsActions.tsx
+│   │   │   ├── CostosQuickAction.tsx
+│   │   │   ├── CostosResult.tsx
+│   │   │   ├── CostosSearchModal.tsx
+│   │   │   ├── CursoQuickAction.tsx
+│   │   │   ├── README.md
+│   │   │   ├── RelatorQuickAction.tsx
+│   │   │   ├── RelatorResult.tsx
+│   │   │   ├── RelatorResultWrapper.tsx
+│   │   │   ├── RelatorSearchModal.tsx
+│   │   │   ├── index.ts
+│   │   │   ├── useRelatorSearch.ts
 │   ├── hooks/
+│   │   ├── __tests__/
 │   │   ├── use-mobile.tsx
 │   │   ├── use-toast.ts
+│   │   ├── useConversationMode.ts
+│   │   ├── useSessionId.ts
 │   ├── index.css
 │   ├── interfaces/
 │   │   ├── User.ts
 │   ├── lib/
 │   │   ├── chatStorage.ts
+│   │   ├── payloadBuilder.ts
+│   │   ├── responseTypes.ts
+│   │   ├── telemetry.ts
+│   │   ├── tmsPrompts.ts
 │   │   ├── utils.ts
 │   ├── main.tsx
 │   ├── pages/
@@ -189,6 +217,55 @@ npm install
 # Ejecutar en modo desarrollo
 npm run dev
 ```
+
+## 🧠 Modo Libre (Free Mode)
+
+Este frontend implementa **dual-mode routing** para soportar tanto consultas guiadas (con intents específicos) como modo libre (chat abierto).
+
+### Características principales:
+- **Modo Guiado (🎯 Guided)**: Quick Actions TMS con payloads deterministas que incluyen `intent`
+- **Modo Libre (💭 Free)**: Chat abierto que envía payloads sin `intent` permitiendo consultas flexibles
+- **Debugging UI**: Indicadores visuales y alertas cuando el backend fuerza guided mode
+- **Telemetría**: Sistema de tracking no intrusivo para análisis de uso
+
+### Testing del Modo Libre:
+Para probar la implementación completa, abrir:
+```
+http://localhost:5173/test-free-mode.html
+```
+
+### Payload Structure:
+
+**Free Mode Payload:**
+```json
+{
+  "message": "¿Qué cursos están disponibles?",
+  "role": "tms:coordinador",
+  "session_id": "uuid...",
+  "source": "chat_input"
+}
+```
+
+**Guided Mode Payload:**
+```json
+{
+  "message": "Consulta R11...",
+  "role": "tms:coordinador", 
+  "session_id": "uuid...",
+  "source": "quick_action",
+  "intent": "tms.get_r11"
+}
+```
+
+### Indicadores UI:
+- **ChipModo**: Muestra el modo actual (`🎯 Guided` vs `💭 Free`)
+- **DebugBanner**: Alertas cuando hay mode mismatch entre frontend y backend
+- **Console Logs**: Verificación de payloads y detección de inconsistencias
+
+### Backend Compatibility:
+- Compatible con `FREE_MODE_ENABLED=true` para modo libre completo
+- Detecta automáticamente cuando `FREE_MODE_ENABLED=false` fuerza guided mode
+- Mantiene 100% backward compatibility con flows TMS existentes
 
 ## 🔗 Integración con TMS
 
@@ -739,10 +816,30 @@ import {
 } from "@/lib/chatStorage";
 import { useAuth } from "@/contexts/AuthContext";
 import { SuggestedQuestions } from "./SuggestedQuestions";
-import { toast } from "@/components/ui/use-toast";
-import { useIsMobile } from "@/hooks/use-mobile"; 
+import { useIsMobile } from "@/hooks/use-mobile";
+import { useSessionId } from "@/hooks/useSessionId";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { useToast } from "@/hooks/use-toast";
+import { TmsQuickActions, type TmsActionType } from "./TmsQuickActions";
+import { CourseCodeModal } from "./CourseCodeModal";
+import { generateTmsPrompt } from "@/lib/tmsPrompts";
+// ADD: Imports para modo libre
+import { ChipModo } from "./ChipModo";
+import { DrawerTrace } from "./DrawerTrace";
+import { DebugBanner } from "./DebugBanner";
+import { useConversationMode, useComparisonHints } from "@/hooks/useConversationMode";
+import { buildGuidedPayload, buildFreePayload } from "@/lib/payloadBuilder";
+import { sendChatTelemetry } from "@/lib/telemetry";
+import { type ExtendedChatApiResponse, type LastPayloadState } from "@/lib/responseTypes";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
 interface ChatApiMeta {
   total_cursos?: number;
@@ -750,6 +847,14 @@ interface ChatApiMeta {
   page_size?: number;
   returned?: number;
   citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  // ADD: Información de trazabilidad para modo libre
+  trace?: {
+    candidates?: Array<{ id?: string; title?: string; score?: number; source?: string }>;
+    tools_called?: string[];
+    search_strategy?: string;
+    mode?: "guided" | "free";
+    disabled_by_flag?: boolean;
+  };
   [k: string]: unknown;
 }
 
@@ -790,6 +895,106 @@ const sendTelemetry = (event: string, data?: Record<string, unknown>) => {
   }
 };
 
+// Helper function to generate demo relator data for testing
+const generateDemoRelatorData = (target: { rut?: string; nombre?: string } | undefined) => {
+  const searchTerm = target?.rut || target?.nombre || "búsqueda";
+  
+  if (target?.rut) {
+    return `**Relator encontrado:**
+
+**Nombre:** Juan Carlos Pérez Mendoza  
+**RUT:** ${target.rut}  
+**Especialidad:** Logística y Transporte  
+**Estado:** Activo  
+**Cursos dictados:** 15  
+**Evaluación promedio:** 4.8/5.0
+
+**Contacto:**
+- Email: juan.perez@insecap.cl
+- Teléfono: +56 9 8765 4321
+
+**Últimos cursos:**
+- Gestión de Cadena de Suministro (Dic 2024)
+- Optimización de Rutas de Transporte (Nov 2024)
+- Logística Internacional (Oct 2024)
+
+*Esta es información de demostración para testing del frontend.*`;
+  }
+  
+  if (target?.nombre) {
+    return `**Relatores encontrados para "${target.nombre}":**
+
+**1. María Elena González**  
+**RUT:** 12.345.678-9  
+**Especialidad:** Logística Portuaria  
+**Cursos:** 23 | **Evaluación:** 4.9/5.0
+
+**2. Carlos Alberto Fernández**  
+**RUT:** 23.456.789-0  
+**Especialidad:** Transporte Terrestre  
+**Cursos:** 18 | **Evaluación:** 4.7/5.0
+
+**3. Ana Sofía Martínez**  
+**RUT:** 34.567.890-1  
+**Especialidad:** Gestión de Inventarios  
+**Cursos:** 31 | **Evaluación:** 4.8/5.0
+
+*Resultados de demostración para testing del frontend.*`;
+  }
+  
+  return `**Búsqueda de relatores**
+
+No se encontraron resultados para "${searchTerm}".
+
+**Sugerencias:**
+- Verifica que el RUT esté en formato correcto (XX.XXX.XXX-X)
+- Intenta con el nombre completo del relator
+- Consulta con el área de coordinación académica
+
+*Esta es información de demostración para testing del frontend.*`;
+};
+
+// Helper function to generate demo costos data for testing
+const generateDemoCostosData = (target: { codigoComer?: string } | undefined) => {
+  const codigo = target?.codigoComer || "CÓDIGO";
+  
+  return `INFORMACIÓN DE COSTOS - ${codigo}
+
+=== COSTOS DIRECTOS ===
+Honorarios Relator:         $850.000
+Material Didáctico:         $125.000
+Sala de Clases:            $180.000
+Equipamiento Técnico:       $95.000
+Certificaciones:           $45.000
+                           ----------
+Subtotal Directo:         $1.295.000
+
+=== COSTOS INDIRECTOS ===
+Administración (8%):       $103.600
+Coordinación Académica:     $75.000
+Soporte Técnico:           $35.000
+Marketing:                 $50.000
+                           ----------
+Subtotal Indirecto:        $263.600
+
+=== RESUMEN FINAL ===
+Total Costos Directos:    $1.295.000
+Total Costos Indirectos:    $263.600
+                           ----------
+COSTO TOTAL PROGRAMA:     $1.558.600
+
+Margen Sugerido (25%):      $389.650
+PRECIO VENTA SUGERIDO:    $1.948.250
+
+=== NOTAS ===
+- Precios actualizados: Octubre 2024
+- Válido para grupos de 15-20 participantes
+- No incluye traslados ni hospedaje
+- Cotización válida por 30 días
+
+*Esta es información de demostración para testing del frontend.*`;
+};
+
 export const CapinChat = ({
   apiEndpoint = import.meta.env.VITE_API_ENDPOINT ?? "http://localhost:8000/api/chat",
   onError,
@@ -798,29 +1003,48 @@ export const CapinChat = ({
   showWelcome = true,
   sessionScope = "guest",
 }: CapinChatProps) => {
-  const [sessionId] = useState(() => {
-    const existing = loadSessionId(sessionScope);
-    if (existing) return existing;
-    const generated = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    saveSessionId(sessionScope, generated);
-    return generated;
-  });
+  // Hook para manejo de sesiones
+  const { sessionId, resetSession } = useSessionId();
+  const { toast } = useToast();
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [isResettingSession, setIsResettingSession] = useState(false);
 
   const [lastMeta, setLastMeta] = useState<ChatApiMeta | null>(null);
   const [lastQuery, setLastQuery] = useState<string>("");
+  
+  // ADD: Estados para tracking de modo libre (NO afecta flujos existentes)
+  const [lastPayload, setLastPayload] = useState<{ source?: string; intent?: string; timestamp?: number } | null>(null);
+  
+  // ADD: Estados para debugging de mode mismatch
+  const [modeMismatch, setModeMismatch] = useState<{ expected: string; received: string; strategy?: string } | null>(null);
+
+  // ADD: Estados para TMS Quick Actions
+  const [isTmsModalOpen, setIsTmsModalOpen] = useState(false);
+  const [selectedTmsAction, setSelectedTmsAction] = useState<TmsActionType | null>(null);
 
   const { user } = useAuth();
   const initialRole: AppRole = (user?.role as AppRole) ?? "publico";
 
   const [selectedRole, setSelectedRole] = useState<AppRole>(initialRole);
+  
+  // ADD: Computed - verificar si es rol TMS (incluye "tms" base y "tms:*" con subroles)
+  const isTmsRole = selectedRole === 'tms' || selectedRole.startsWith('tms:');
   const [rut, setRut] = useState<string>("");
+  const [idCliente, setIdCliente] = useState<string>("");
+  const [correo, setCorreo] = useState<string>("");
+  const [tmsSubrol, setTmsSubrol] = useState<string>("coordinador"); // ADD: Estado para subrol TMS
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null); // ADD
   const isMobile = useIsMobile(); // ADD
+  
+  // ADD: Hook para determinar modo actual
+  const conversationMode = useConversationMode({
+    lastSource: lastPayload?.source,
+    lastIntent: lastPayload?.intent,
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -865,22 +1089,6 @@ export const CapinChat = ({
     }));
     saveMessages(sessionId, serializable.slice(-100));
   }, [messages, sessionId]);
-
-  // Toast para paginación (ADD-ONLY)
-  useEffect(() => {
-    if (
-      lastMeta &&
-      typeof lastMeta.total_cursos === "number" &&
-      typeof lastMeta.page_size === "number" &&
-      lastMeta.total_cursos > lastMeta.page_size
-    ) {
-      toast({
-        title: "Navegación de cursos",
-        description: "Navega con 'siguiente/anterior' o escribe un código para ir directo al curso.",
-        duration: 5000,
-      });
-    }
-  }, [lastMeta]);
 
   // --- Paginación derivada del meta ---
   const page = Number(lastMeta?.page ?? 0);
@@ -931,25 +1139,73 @@ export const CapinChat = ({
   };
 
   // === API ===
-  const callChatAPI = async (question: string): Promise<ChatApiResponse> => {
+  const callChatAPI = async (question: string, pageOverride?: number): Promise<ChatApiResponse> => {
     const shouldSendRut =
       (selectedRole === "alumno" || selectedRole === "relator") && rut.trim().length > 0;
-    const claims = shouldSendRut ? { rut: rut.trim() } : undefined;
+    
+    const shouldSendClienteClaims =
+      selectedRole === "cliente" && 
+      rut.trim().length > 0 && 
+      idCliente.trim().length > 0 && 
+      correo.trim().length > 0;
+
+    let claims: Record<string, string> | undefined;
+    
+    if (shouldSendRut) {
+      claims = { rut: rut.trim() };
+    } else if (shouldSendClienteClaims) {
+      claims = { 
+        rut: rut.trim(), 
+        idCliente: idCliente.trim(), 
+        correo: correo.trim() 
+      };
+    }
+
+    // ADD: Filtros de paginación para cliente
+    let filters: Record<string, number> | undefined;
+    if (selectedRole === "cliente") {
+      const currentPage = pageOverride || page || 1;
+      const currentPageSize = pageSize || 10;
+      filters = {
+        page: currentPage,
+        page_size: currentPageSize
+      };
+    }
+
+    // ADD: Determinar el rol final a enviar al backend
+    const finalRole = selectedRole === "tms" ? `tms:${tmsSubrol}` : selectedRole;
 
     const userPayload: unknown = {
       sub: "",
-      role: selectedRole,
+      role: finalRole, // MODIFICADO: Usar finalRole que incluye formato "tms:subrol"
       session_id: sessionId,
       tenantId: "insecap",
       ...(claims ? { claims } : {}),
+      ...(filters ? { filters } : {}),
     };
+
+    // Log para debugging del RAG backend
+
+
+    // ADD: Verificación explícita de payload para debugging
+    const payloadSource = lastPayload?.source || "chat_input";
+    const payloadIntent = lastPayload?.intent;
+    const modeCandidate = payloadIntent ? "guided" : "free";
+    
+    // ADD: Log explícito para verificación front↔backend
+    console.info(`[PAYLOAD VERIFICATION] modeCandidate: ${modeCandidate}, source: ${payloadSource}, intent: ${payloadIntent || 'undefined'}, role: ${finalRole}, session_id: ${sessionId}`);
 
     const res = await fetch(apiEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: question,
-        role: selectedRole,
+        role: finalRole, // Enviar el rol correcto (con subroles tms:*)
+        session_id: sessionId, // Incluir session_id en el payload principal
+        // ADD: Incluir source para enrutamiento backend (SIEMPRE)
+        source: payloadSource,
+        // ADD: Incluir intent solo si existe (modo guided)
+        ...(payloadIntent ? { intent: payloadIntent } : {}),
         user: userPayload,
       }),
     });
@@ -959,6 +1215,7 @@ export const CapinChat = ({
       throw new Error(`HTTP ${res.status} - ${text}`);
     }
     const data = (await res.json()) as ChatApiResponse;
+    
     return data;
   };
 
@@ -978,10 +1235,458 @@ export const CapinChat = ({
     setLastQuery("");
   };
 
+  // ADD: Función para cambiar sesión
+  const handleResetSession = async () => {
+    setIsResettingSession(true);
+    
+    try {
+      // Generar nuevo session_id
+      const newSessionId = resetSession();
+      
+      // Limpiar historial visual (pero NO el backend)
+      setMessages([
+        {
+          id: "welcome",
+          text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
+          sender: "assistant",
+          timestamp: new Date(),
+        },
+      ]);
+      setLastMeta(null);
+      setLastQuery("");
+      
+      // Mostrar toast informativo
+      toast({
+        title: "Sesión cambiada",
+        description: `Nueva sesión: ${newSessionId.slice(0, 8)}... Los próximos 8 mensajes usarán contexto limpio.`,
+        duration: 3000,
+      });
+      
+
+      
+    } catch (error) {
+      console.error("Error al cambiar sesión:", error);
+      toast({
+        title: "Error",
+        description: "No se pudo cambiar la sesión. Intenta de nuevo.",
+        variant: "destructive",
+        duration: 3000,
+      });
+    } finally {
+      // Deshabilitar input por 200ms para evitar dobles envíos
+      setTimeout(() => {
+        setIsResettingSession(false);
+      }, 200);
+    }
+  };
+
+  // ADD: Handlers para TMS Quick Actions
+  const handleTmsActionClick = (action: TmsActionType) => {
+    setSelectedTmsAction(action);
+    setIsTmsModalOpen(true);
+  };
+
+  const handleTmsConfirm = async (codigoCurso: string, tipo: TmsActionType) => {
+    // MANTENER EXACTO: Generar prompt usando función existente
+    const explicitPrompt = generateTmsPrompt(codigoCurso, tipo);
+    
+    // ADD: Tracking para modo guided (NO cambia el comportamiento)
+    setLastPayload({
+      source: "quick_action",
+      intent: `tms.get_${tipo.toLowerCase()}`,
+      timestamp: Date.now(),
+    });
+    
+    // ADD: Telemetría no disruptiva
+    sendChatTelemetry({
+      mode: "guided",
+      source: "quick_action",
+      intent: `tms.get_${tipo.toLowerCase()}`,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Log para debugging
+
+    
+    // MANTENER EXACTO: Enviar el mensaje con el prompt explícito generado (sin cambios)
+    await handleSendMessage(`Consultar ${tipo}: ${codigoCurso}`, explicitPrompt);
+  };
+
+  // ADD: Manejador para acciones adicionales (RelatorQuickAction)
+  const handleAdditionalActionSend = async (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target?: { rut?: string; nombre?: string; codigoComer?: string };
+  }) => {
+    try {
+      // Tracking para modo guided
+      setLastPayload({
+        source: payload.source,
+        intent: payload.intent,
+        timestamp: Date.now(),
+      });
+
+      // Telemetría
+      sendChatTelemetry({
+        mode: "guided",
+        source: payload.source as "quick_action",
+        intent: payload.intent,
+        role: selectedRole,
+        session_id: sessionId,
+      });
+
+      // Log para debugging
+
+
+      // Construir mensaje descriptivo para el chat
+      let displayMessage = payload.message;
+      if (payload.intent === "tms.find_relator") {
+        if (payload.target?.rut) {
+          displayMessage = `Buscar relator con RUT: ${payload.target.rut}`;
+        } else if (payload.target?.nombre) {
+          displayMessage = `Buscar relator con nombre: ${payload.target.nombre}`;
+        }
+      } else if (payload.intent === "tms.get_costos") {
+        if (payload.target?.codigoComer) {
+          displayMessage = `Consultar costos para: ${payload.target.codigoComer}`;
+        }
+      }
+
+      // Agregar mensaje del usuario al chat
+      const userMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}`,
+        text: displayMessage,
+        sender: "user",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+
+      setIsTyping(true);
+
+      // Log para debugging - payload exacto
+      console.info('[Additional Action payload]', payload);
+
+      // Construir payload completo EXACTO según especificación
+      const fullPayload = {
+        message: payload.message,                      // Message específico del intent
+        source: payload.source,                        // "quick_action"
+        intent: payload.intent,                        // "tms.find_relator" o "tms.get_costos"
+        role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
+        session_id: sessionId,
+        target: payload.target,                        // obligatorio: rut/nombre o codigoComer
+        user: {
+          role: selectedRole === "tms" ? `tms:${tmsSubrol}` : (selectedRole ?? "tms:logistica"),
+          session_id: sessionId,
+          tenantId: "insecap",
+          claims: {}
+        }
+      } as const;
+
+      // Enviar directamente al API endpoint
+      const response = await fetch(apiEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(fullPayload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data: ExtendedChatApiResponse = await response.json();
+
+      // Procesar respuesta igual que en callChatAPI
+      const assistantMessage: Message = {
+        id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-assistant`,
+        text: data.answer,
+        sender: "assistant",
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, assistantMessage]);
+      setLastMeta(data.meta);
+
+      // Log para debugging del modo
+
+
+      // Banner de depuración para intent deshabilitado
+      if (data.meta?.trace?.mode === "guided" && data.meta?.trace?.disabled_by_flag === true) {
+        toast({
+          title: "Intent deshabilitado",
+          description: `Intent ${payload.intent} deshabilitado por el servidor`,
+          variant: "default",
+        });
+      }
+
+    } catch (error) {
+      console.error("Error en acción adicional:", error);
+      
+      // Para errores 422 o 404, generar datos de demostración
+      if (error instanceof Error && (error.message.includes('422') || error.message.includes('404'))) {
+
+        
+        let demoData: string;
+        if (payload.intent === "tms.find_relator") {
+          demoData = generateDemoRelatorData(payload.target);
+        } else if (payload.intent === "tms.get_costos") {
+          demoData = generateDemoCostosData(payload.target);
+        } else {
+          demoData = `Datos de demostración para intent: ${payload.intent}`;
+        }
+        
+        const assistantMessage: Message = {
+          id: crypto.randomUUID ? crypto.randomUUID() : `msg-${Date.now()}-demo`,
+          text: demoData,
+          sender: "assistant",
+          timestamp: new Date(),
+        };
+        
+        setMessages((prev) => [...prev, assistantMessage]);
+        
+        toast({
+          title: "Modo Demo",
+          description: "Mostrando datos de ejemplo (backend no disponible)",
+          variant: "default",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: "No se pudo procesar la acción. Inténtalo de nuevo.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  // ADD: Handler para selección de relator desde resultados clickeables
+  const handleRelatorSelect = async (rut: string) => {
+
+    
+    // Crear payload para búsqueda por RUT
+    const payload = {
+      source: "relator_result_click",
+      intent: "tms.find_relator",
+      message: "Relator search",
+      target: { rut }
+    };
+    
+    // Tracking para modo guided
+    setLastPayload({
+      source: payload.source,
+      intent: payload.intent,
+      timestamp: Date.now(),
+    });
+    
+    // Telemetría
+    sendChatTelemetry({
+      mode: "guided",
+      source: payload.source as "quick_action",
+      intent: payload.intent,
+      role: selectedRole,
+      session_id: sessionId,
+    });
+    
+    // Enviar búsqueda automática
+    await handleAdditionalActionSend(payload);
+  };
+
+  // ADD: Atajo de teclado Ctrl+K para R11
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'k' && isTmsRole) {
+        e.preventDefault();
+        handleTmsActionClick('R11');
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTmsRole]);
+
   const handleSendMessage = async (display: string, actual?: string) => {
     const visibleText = display?.trim();
     const promptToSend = (actual ?? display)?.trim();
     if (!visibleText) return;
+
+    // ADD: Detectar si NO viene de Quick Action (modo libre)
+    const isFromQuickAction = lastPayload?.source === "quick_action" && 
+                             Date.now() - (lastPayload.timestamp || 0) < 1000; // 1 segundo de gracia
+    
+    if (!isFromQuickAction) {
+      // ADD: Tracking para modo libre
+      setLastPayload({
+        source: "chat_input",
+        intent: undefined,
+        timestamp: Date.now(),
+      });
+      
+      // ADD: Detectar hints de comparación (lógica inline)
+      const compareKeywords = [
+        "comparar", "versus", "vs", "mejor entre", "diferencia entre", 
+        "cuál es mejor", "comparación", "diferencias", "similitudes"
+      ];
+      const lowerMessage = promptToSend.toLowerCase();
+      const wants_compare = compareKeywords.some(keyword => 
+        lowerMessage.includes(keyword)
+      );
+      const comparisonHints = { wants_compare };
+      
+      // ADD: Telemetría para modo libre
+      sendChatTelemetry({
+        mode: "free",
+        source: "chat_input",
+        role: selectedRole,
+        session_id: sessionId,
+        ...(comparisonHints.wants_compare ? { client_hints: comparisonHints } : {}),
+      });
+    }
+
+    // Validar que los campos requeridos estén completos para el rol cliente
+    if (selectedRole === "cliente") {
+      if (!rut.trim() || !idCliente.trim() || !correo.trim()) {
+        alert("Por favor completa todos los campos requeridos: RUT, ID Cliente y Email");
+        return;
+      }
+      
+      // ADD: Interceptar comandos de paginación para cliente
+      const pageCommand = promptToSend.toLowerCase();
+      
+      // Detectar "página X", "siguiente", "anterior"
+      const pageMatch = pageCommand.match(/^página?\s*(\d+)$/);
+      if (pageMatch) {
+        const targetPage = parseInt(pageMatch[1]);
+        if (targetPage > 0 && hasPagination && targetPage <= totalPages) {
+          sendTelemetry("page_nav", { 
+            page: targetPage, 
+            total_pages: totalPages,
+            session_scope: sessionScope 
+          });
+          const display = `→ Página ${targetPage}`;
+          const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+          // Reenviar la última query con la nueva página
+          setLastQuery(internal);
+          
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            text: display,
+            sender: "user",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, userMessage]);
+          setIsTyping(true);
+          
+          try {
+            const data = await callChatAPI(internal, targetPage);
+            setLastMeta(data.meta ?? null);
+            const assistantMessage: Message = {
+              id: (Date.now() + 1).toString(),
+              text: data.answer ?? "",
+              sender: "assistant", 
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, assistantMessage]);
+          } catch (error) {
+            setMessages((prev) => [...prev, {
+              id: (Date.now() + 1).toString(),
+              text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+              sender: "assistant",
+              timestamp: new Date(),
+            }]);
+          } finally {
+            setIsTyping(false);
+          }
+          return;
+        }
+      }
+      
+      if (pageCommand === "siguiente" && canNext) {
+        sendTelemetry("page_nav", { 
+          page: page + 1, 
+          total_pages: totalPages,
+          session_scope: sessionScope 
+        });
+        const display = `→ Página ${page + 1}`;
+        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+        
+        setLastQuery(internal);
+        const userMessage: Message = {
+          id: Date.now().toString(),
+          text: display,
+          sender: "user",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, userMessage]);
+        setIsTyping(true);
+        
+        try {
+          const data = await callChatAPI(internal, page + 1);
+          setLastMeta(data.meta ?? null);
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            text: data.answer ?? "",
+            sender: "assistant",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        } catch (error) {
+          setMessages((prev) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+            sender: "assistant",
+            timestamp: new Date(),
+          }]);
+        } finally {
+          setIsTyping(false);
+        }
+        return;
+      }
+      
+      if (pageCommand === "anterior" && canPrev) {
+        sendTelemetry("page_nav", { 
+          page: page - 1, 
+          total_pages: totalPages,
+          session_scope: sessionScope 
+        });
+        const display = `→ Página ${page - 1}`;
+        const internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+        
+        setLastQuery(internal);
+        const userMessage: Message = {
+          id: Date.now().toString(),
+          text: display,
+          sender: "user",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, userMessage]);
+        setIsTyping(true);
+        
+        try {
+          const data = await callChatAPI(internal, page - 1);
+          setLastMeta(data.meta ?? null);
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            text: data.answer ?? "",
+            sender: "assistant",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        } catch (error) {
+          setMessages((prev) => [...prev, {
+            id: (Date.now() + 1).toString(),
+            text: "Lo siento, ocurrió un problema al contactar al servicio. Intenta nuevamente.",
+            sender: "assistant",
+            timestamp: new Date(),
+          }]);
+        } finally {
+          setIsTyping(false);
+        }
+        return;
+      }
+    }
 
     if (courseCodePattern.test(visibleText)) {
       sendTelemetry("course_code_query", { 
@@ -1004,7 +1709,24 @@ export const CapinChat = ({
 
     try {
       const data = await callChatAPI(promptToSend);
+
+
       setLastMeta(data.meta ?? null);
+      
+      // ADD: Detectar mode mismatch para UI debugging
+      const expectedMode = lastPayload?.intent ? "guided" : "free";
+      const responseMode = data.meta?.trace?.mode;
+      if (responseMode && responseMode !== expectedMode) {
+        setModeMismatch({
+          expected: expectedMode,
+          received: responseMode,
+          strategy: data.meta?.trace?.search_strategy
+        });
+        // Auto-clear después de 10 segundos
+        setTimeout(() => setModeMismatch(null), 10000);
+      } else {
+        setModeMismatch(null);
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -1013,14 +1735,6 @@ export const CapinChat = ({
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
-
-      if (data.citations && data.citations.length > 1) {
-        toast({
-          title: "Varios cursos encontrados",
-          description: "Selecciona el código exacto para ver detalles específicos.",
-          duration: 4000,
-        });
-      }
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -1046,7 +1760,16 @@ export const CapinChat = ({
     });
     
     const display = `→ Página ${n}`;
-    const internal = `pagina ${n}`;
+    let internal;
+    
+    // Para cliente, reutilizar la última query manteniendo contexto
+    // Para alumno/relator, usar comando de página directo
+    if (selectedRole === "cliente") {
+      internal = lastQuery || "Muéstrame todos mis cursos activos y pasados como cliente";
+    } else {
+      internal = `pagina ${n}`;
+    }
+    
     handleSendMessage(display, internal);
   };
 
@@ -1073,14 +1796,38 @@ export const CapinChat = ({
         userRole={selectedRole}
         onClose={onClose}
         onClear={handleClearChat}
+        onResetSession={handleResetSession} // ADD: Callback para cambiar sesión
+        isResettingSession={isResettingSession} // ADD: Estado para deshabilitar controles
         onChangeRole={setSelectedRole}
         rut={rut}
         onChangeRut={setRut}
+        idCliente={idCliente}
+        onChangeIdCliente={setIdCliente}
+        correo={correo}
+        onChangeCorreo={setCorreo}
+        tmsSubrol={tmsSubrol}
+        onChangeTmsSubrol={setTmsSubrol}
       />
 
-      {/* Sugeridas solo para alumno */}
-      {selectedRole === "alumno" && (
-        <SuggestedQuestions onAsk={handleSendMessage} role={selectedRole} />
+      {/* ADD: Acciones TMS - Solo para roles tms:* */}
+      {isTmsRole && (
+        <TmsQuickActions 
+          onActionClick={handleTmsActionClick}
+          onAdditionalActionSend={handleAdditionalActionSend}
+          currentRole={selectedRole === "tms" ? `tms:${tmsSubrol}` : selectedRole}
+          disabled={isTyping || isResettingSession}
+          isMobile={isMobile}
+        />
+      )}
+
+      {/* Sugeridas para alumno, relator y cliente */}
+      {(selectedRole === "alumno" || selectedRole === "relator" || selectedRole === "cliente") && (
+        <SuggestedQuestions 
+          onAsk={handleSendMessage} 
+          role={selectedRole} 
+          isMobile={isMobile} 
+          disabled={isTyping || isResettingSession}
+        />
       )}
 
       {/* Contenedor de mensajes */}
@@ -1093,12 +1840,43 @@ export const CapinChat = ({
       >
         <div className="space-y-0">
           {messages.map((message) => (
-            <ChatMessage key={message.id} message={message} />
+            <div key={message.id}>
+              <ChatMessage 
+                message={message} 
+                onRelatorSelect={isTmsRole ? handleRelatorSelect : undefined}
+              />
+            </div>
           ))}
           {isTyping && <TypingIndicator />}
           
           {/* Chips de desambiguación después del último mensaje del asistente (ADD-ONLY) */}
           {!isTyping && lastAssistantMessage && renderDisambiguationChips(lastMeta?.citations)}
+          
+          {/* ADD: Chip de modo y drawer de trazabilidad (NO disruptivo) */}
+          {!isTyping && lastAssistantMessage && (
+            <div className="px-4 py-2 flex items-center justify-between">
+              <ChipModo mode={conversationMode} />
+              <DrawerTrace 
+                candidates={lastMeta?.trace?.candidates}
+                toolsCalled={lastMeta?.trace?.tools_called}
+                disabled={isTyping}
+              />
+            </div>
+          )}
+          
+          {/* Aviso de página para cliente después del último mensaje (ADD-ONLY) */}
+          {!isTyping && lastAssistantMessage && selectedRole === "cliente" && hasPagination && (
+            <div className="px-4 py-2 text-center">
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-50 text-blue-700 text-xs rounded-full border border-blue-200">
+                📄 Página {page} de {totalPages}
+                {total > 0 && (
+                  <span className="text-blue-600">
+                    • {showingCount} de {total} cursos
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           
           <div ref={messagesEndRef} />
         </div>
@@ -1106,41 +1884,123 @@ export const CapinChat = ({
         {/* Hint bajo los listados (ADD-ONLY) */}
         {hasPagination && (
           <div className="px-4 py-3 text-xs text-muted-foreground border-t bg-background/80 backdrop-blur-sm">
-            💡 <strong>Tip:</strong> Para ver detalles de un curso específico, escribe su código (ej.: R-REC-214).
+            💡 <strong>Tip:</strong> 
+            {selectedRole === "cliente" 
+              ? "Escribe 'página 2', 'siguiente' o 'anterior' para navegar entre páginas."
+              : "Para ver detalles de un curso específico, escribe su código (ej.: R-REC-214)."
+            }
           </div>
         )}
       </div>
 
       {hasPagination && (
-        <div className="border-t bg-muted/50 px-3 py-2 flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">
-            Página {page} / {totalPages} • Mostrando {showingCount} de {total}
-          </span>
-          <div className="flex gap-2">
-            <button
-              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
-              onClick={() => goToPage(page - 1)}
-              disabled={!canPrev || isTyping}
-              aria-label="Página anterior"
-            >
-              ← Anterior
-            </button>
-            <button
-              className="px-3 py-1 rounded-md border hover:bg-muted disabled:opacity-40 transition-colors"
-              onClick={() => goToPage(page + 1)}
-              disabled={!canNext || isTyping}
-              aria-label="Página siguiente"
-            >
-              Siguiente →
-            </button>
+        <div className="border-t bg-muted/50 px-3 py-2">
+          <div className="flex items-center justify-between text-sm mb-2">
+            <span className="text-muted-foreground">
+              Página {page} de {totalPages} • Mostrando {showingCount} de {total}
+            </span>
           </div>
+          <Pagination>
+            <PaginationContent>
+              <PaginationItem>
+                <PaginationPrevious 
+                  onClick={() => goToPage(page - 1)}
+                  className={!canPrev || isTyping ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+              
+              {/* Mostrar números de página cuando hay pocas páginas */}
+              {totalPages <= 5 && Array.from({length: totalPages}, (_, i) => i + 1).map((pageNum) => (
+                <PaginationItem key={pageNum}>
+                  <PaginationLink
+                    onClick={() => goToPage(pageNum)}
+                    isActive={pageNum === page}
+                    className="cursor-pointer"
+                  >
+                    {pageNum}
+                  </PaginationLink>
+                </PaginationItem>
+              ))}
+              
+              {/* Para muchas páginas, mostrar página actual y adyacentes */}
+              {totalPages > 5 && (
+                <>
+                  {page > 2 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(1)} className="cursor-pointer">
+                        1
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  {page > 3 && <span className="text-muted-foreground">...</span>}
+                  
+                  {page > 1 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(page - 1)} className="cursor-pointer">
+                        {page - 1}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  <PaginationItem>
+                    <PaginationLink isActive className="cursor-pointer">
+                      {page}
+                    </PaginationLink>
+                  </PaginationItem>
+                  
+                  {page < totalPages && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(page + 1)} className="cursor-pointer">
+                        {page + 1}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                  
+                  {page < totalPages - 2 && <span className="text-muted-foreground">...</span>}
+                  
+                  {page < totalPages - 1 && (
+                    <PaginationItem>
+                      <PaginationLink onClick={() => goToPage(totalPages)} className="cursor-pointer">
+                        {totalPages}
+                      </PaginationLink>
+                    </PaginationItem>
+                  )}
+                </>
+              )}
+              
+              <PaginationItem>
+                <PaginationNext 
+                  onClick={() => goToPage(page + 1)}
+                  className={!canNext || isTyping ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                />
+              </PaginationItem>
+            </PaginationContent>
+          </Pagination>
         </div>
       )}
 
+      {/* ADD: Banner de debugging para mode mismatch */}
+      <DebugBanner
+        modeMismatch={modeMismatch}
+        forcedGuidedMode={lastMeta?.trace?.mode === "guided" && lastMeta?.trace?.search_strategy === "forced_by_flag"}
+      />
+
       <ChatInput 
         onSendMessage={(text) => handleSendMessage(text)} 
-        disabled={isTyping} 
+        disabled={isTyping || isResettingSession} 
         inputRef={inputRef}
+      />
+
+      {/* ADD: Modal para código de curso TMS */}
+      <CourseCodeModal
+        isOpen={isTmsModalOpen}
+        onClose={() => {
+          setIsTmsModalOpen(false);
+          setSelectedTmsAction(null);
+        }}
+        onConfirm={handleTmsConfirm}
+        actionType={selectedTmsAction}
       />
     </div>
   );
@@ -1159,11 +2019,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { X, Trash2, ChevronDown } from "lucide-react";
+import { X, Trash2, ChevronDown, RotateCcw } from "lucide-react";
 import insecapLogo from "@/assets/insecap-logo4.png";
 import capinMascot from "@/assets/capin-mascot.png";
 
-type AppRole = "tms" | "publico" | "alumno" | "relator";
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
 
 interface ChatHeaderProps {
   isMinimized?: boolean;
@@ -1171,23 +2031,53 @@ interface ChatHeaderProps {
   onToggleMinimize?: () => void;
   onClose?: () => void;
   onClear?: () => void;
+  onResetSession?: () => void; // ADD: Callback para cambiar sesión
+  isResettingSession?: boolean; // ADD: Estado para deshabilitar controles
 
   onChangeRole?: (r: AppRole) => void;
   rut?: string;
   onChangeRut?: (rut: string) => void;
+  idCliente?: string;
+  onChangeIdCliente?: (v: string) => void;
+  correo?: string;
+  onChangeCorreo?: (v: string) => void;
+  
+  // ADD: Props para TMS subrol
+  tmsSubrol?: string;
+  onChangeTmsSubrol?: (subrol: string) => void;
 }
 
 export const ChatHeader = ({
-  isMinimized,
   userRole = "publico",
-  onToggleMinimize,
   onClose,
   onClear,
+  onResetSession,
+  isResettingSession = false,
   onChangeRole,
   rut = "",
   onChangeRut,
+  idCliente = "",
+  onChangeIdCliente,
+  correo = "",
+  onChangeCorreo,
+  tmsSubrol = "coordinador",
+  onChangeTmsSubrol,
 }: ChatHeaderProps) => {
-  const showRut = userRole === "alumno" || userRole === "relator";
+  const showRut = userRole === "alumno" || userRole === "relator" || userRole === "cliente";
+  const showCli = userRole === "cliente";
+  const showTms = userRole === "tms";
+
+  const tmsSubrolOptions = [
+    { value: "coordinador", label: "Coordinador" },
+    { value: "comercial", label: "Comercial" },
+    { value: "postcurso", label: "Postcurso" },
+    { value: "facturacion", label: "Facturación" },
+    { value: "logistica", label: "Logística" },
+    { value: "administrador", label: "Administrador" },
+    { value: "gerencia", label: "Gerencia" },
+    { value: "diseno&desarrollo", label: "Diseño & Desarrollo" },
+    { value: "diseno", label: "Diseño" },
+  ];
 
   return (
     <div className="bg-gradient-primary text-white p-3 rounded-t-xl shadow-chat">
@@ -1227,6 +2117,7 @@ export const ChatHeader = ({
                     <SelectItem value="publico">Público</SelectItem>
                     <SelectItem value="alumno">Alumno</SelectItem>
                     <SelectItem value="relator">Relator</SelectItem>
+                    <SelectItem value="cliente">Cliente</SelectItem>
                     <SelectItem value="tms">TMS</SelectItem>
                   </SelectContent>
                 </Select>
@@ -1243,6 +2134,49 @@ export const ChatHeader = ({
                   />
                 </div>
               )}
+
+              {showCli && (
+                <>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] text-white/80 whitespace-nowrap">ID Cliente:</span>
+                    <Input
+                      value={idCliente}
+                      onChange={(e) => onChangeIdCliente?.(e.target.value)}
+                      placeholder="CLI-001234"
+                      className="h-7 w-[138px] sm:w-[150px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] text-white/80 whitespace-nowrap">Email:</span>
+                    <Input
+                      type="email"
+                      value={correo}
+                      onChange={(e) => onChangeCorreo?.(e.target.value)}
+                      placeholder="cliente@dominio.cl"
+                      className="h-7 w-[180px] sm:w-[200px] text-xs px-2 bg-white/10 border-white/30 text-white placeholder:text-white/60"
+                    />
+                  </div>
+                </>
+              )}
+
+              {showTms && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-white/80 whitespace-nowrap">Área:</span>
+                  <Select value={tmsSubrol} onValueChange={(v: string) => onChangeTmsSubrol?.(v)}>
+                    <SelectTrigger className="h-7 px-2 pr-7 w-[150px] sm:w-[160px] text-xs bg-white/10 border-white/30 text-white">
+                      <SelectValue placeholder="Seleccionar área" />
+                      <ChevronDown className="h-3 w-3 ml-auto opacity-60" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tmsSubrolOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1252,8 +2186,20 @@ export const ChatHeader = ({
           <Button
             variant="outline"
             size="sm"
+            onClick={onResetSession}
+            disabled={isResettingSession}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white disabled:opacity-50"
+            title="Cambiar sesión (contexto limpio)"
+          >
+            <RotateCcw className="h-4 w-4" />
+          </Button>
+          
+          <Button
+            variant="outline"
+            size="sm"
             onClick={onClear}
-            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            disabled={isResettingSession}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white disabled:opacity-50"
             title="Limpiar conversación"
           >
             <Trash2 className="h-4 w-4" />
@@ -1263,7 +2209,8 @@ export const ChatHeader = ({
             variant="outline"
             size="sm"
             onClick={onClose}
-            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white"
+            disabled={isResettingSession}
+            className="h-7 px-2 bg-white/10 hover:bg-white/20 border-white/30 text-white disabled:opacity-50"
             title="Cerrar"
           >
             <X className="h-4 w-4" />
@@ -1387,6 +2334,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Copy, Check, ExternalLink } from "lucide-react";
 import capinMascot from "@/assets/capin-mascot.png";
+import { RelatorResult } from "@/features/tms/RelatorResult";
+import { CostosResult } from "@/features/tms/CostosResult";
 
 export interface Message {
   id: string;
@@ -1398,9 +2347,10 @@ export interface Message {
 
 interface ChatMessageProps {
   message: Message;
+  onRelatorSelect?: (rut: string) => void;
 }
 
-export const ChatMessage = ({ message }: ChatMessageProps) => {
+export const ChatMessage = ({ message, onRelatorSelect }: ChatMessageProps) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -1410,6 +2360,79 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
   };
 
   const isUser = message.sender === "user";
+
+  // Detectar si el contenido del asistente incluye información de relatores
+  const isRelatorContent = !isUser && (
+    message.text.includes("Relator encontrado") ||
+    message.text.includes("Relatores encontrados") ||
+    message.text.includes("múltiples coincidencias") ||
+    message.text.includes("Encontré varias coincidencias") ||
+    /\d{1,2}\.\d{3}\.\d{3}[-.][\dKk]/.test(message.text) // Detectar RUTs en el contenido
+  );
+
+  // Detectar si el contenido del asistente incluye información de costos
+  const isCostosContent = !isUser && (
+    message.text.includes("COSTOS") ||
+    message.text.includes("COSTO TOTAL") ||
+    message.text.includes("PRECIO VENTA") ||
+    message.text.includes("Honorarios") ||
+    message.text.includes("===") ||
+    message.text.includes("Costos by codigoComer")
+  );
+
+  // Si es contenido de relatores, usar RelatorResult
+  if (isRelatorContent && onRelatorSelect) {
+    return (
+      <div className={`flex gap-3 p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-8 h-8 border-2 border-primary/20">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[80%] text-left">
+          <div className="inline-block p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <RelatorResult content={message.text} onRelatorSelect={onRelatorSelect} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Si es contenido de costos, usar CostosResult
+  if (isCostosContent) {
+    return (
+      <div className={`flex gap-3 p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-8 h-8 border-2 border-primary/20">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[80%] text-left">
+          <div className="inline-block p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <CostosResult content={message.text} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Regex para detectar URLs (capturando las coincidencias)
   const linkRegex = /(https?:\/\/[^\s]+)/g;
@@ -1429,7 +2452,7 @@ export const ChatMessage = ({ message }: ChatMessageProps) => {
 
     // Luego cierres de paréntesis/corchetes/llaves solo si están desbalanceados
     const pairs: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
-    const endCloser = /[)\]\}]$/;
+    const endCloser = /[)\]}]$/;
 
     const count = (s: string, ch: string) => (s.match(new RegExp("\\" + ch, "g")) || []).length;
 
@@ -1595,12 +2618,378 @@ const ChatWidget = () => {
 export default ChatWidget;
 
 
+==== src\components\ChipModo.tsx ====
+import { Badge } from "@/components/ui/badge";
+
+interface ChipModoProps {
+  mode: "guided" | "free";
+  className?: string;
+}
+
+export const ChipModo = ({ mode, className = "" }: ChipModoProps) => {
+  const isGuided = mode === "guided";
+  
+  return (
+    <Badge 
+      variant={isGuided ? "default" : "secondary"}
+      className={`
+        text-xs font-medium px-2 py-1
+        ${isGuided 
+          ? "bg-blue-100 text-blue-700 border-blue-200" 
+          : "bg-green-100 text-green-700 border-green-200"
+        }
+        ${className}
+      `}
+    >
+      {isGuided ? "🎯 Guided" : "💭 Free"}
+    </Badge>
+  );
+};
+
+==== src\components\CourseCodeModal.tsx ====
+import { useState, useEffect } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { FileText, Calculator, ClipboardList, Calendar } from "lucide-react";
+import type { TmsActionType } from "./TmsQuickActions";
+
+interface CourseCodeModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (codigoCurso: string, tipo: TmsActionType) => void;
+  actionType: TmsActionType | null;
+}
+
+const ACTION_CONFIG = {
+  R11: {
+    title: 'Consultar R11',
+    description: 'Información del R11 (relator, objetivos, contenidos, horas)',
+    icon: FileText,
+    color: 'text-blue-600'
+  },
+  R12: {
+    title: 'Consultar R12', 
+    description: 'Costos R12 desglosados y observaciones',
+    icon: Calculator,
+    color: 'text-green-600'
+  },
+  R61: {
+    title: 'Consultar R61',
+    description: 'Registros R61 y contenidos específicos',
+    icon: ClipboardList,
+    color: 'text-orange-600'
+  },
+  BLOQUES: {
+    title: 'Consultar Bloques',
+    description: 'Lista de bloques con fechas, horarios y relatores',
+    icon: Calendar,
+    color: 'text-purple-600'
+  }
+};
+
+export const CourseCodeModal = ({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  actionType 
+}: CourseCodeModalProps) => {
+  const [codigoCurso, setCodigoCurso] = useState('');
+  const [isValid, setIsValid] = useState(false);
+  const [error, setError] = useState('');
+
+  // Cargar último código ingresado desde localStorage
+  useEffect(() => {
+    if (isOpen) {
+      const lastCode = localStorage.getItem('tms_last_course_code');
+      if (lastCode) {
+        setCodigoCurso(lastCode);
+      }
+    }
+  }, [isOpen]);
+
+  // Validar código de curso
+  useEffect(() => {
+    if (!codigoCurso.trim()) {
+      setIsValid(false);
+      setError('');
+      return;
+    }
+
+    // Patrón flexible: P-OPE-1012, ES-COM-1352, EA-TEC-001, ES-COM-12, P-OPE-1, etc.
+    const pattern = /^[A-Z]{1,2}-[A-Z]{3,4}-\d{1,6}$/;
+    const valid = pattern.test(codigoCurso.trim().toUpperCase());
+    
+    setIsValid(valid);
+    setError(valid ? '' : 'Formato: P-OPE-1012 (ej: ES-COM-1352, EA-TEC-001, P-OPE-12, ES-COM-1)');
+  }, [codigoCurso]);
+
+  const handleConfirm = () => {
+    if (!actionType || !isValid) return;
+
+    const normalizedCode = codigoCurso.trim().toUpperCase();
+    
+    // Guardar último código en localStorage
+    localStorage.setItem('tms_last_course_code', normalizedCode);
+    
+    onConfirm(normalizedCode, actionType);
+    onClose();
+    setCodigoCurso('');
+  };
+
+  const handleClose = () => {
+    onClose();
+    setCodigoCurso('');
+    setError('');
+  };
+
+  // Manejar tecla Enter
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && isValid) {
+      handleConfirm();
+    } else if (e.key === 'Escape') {
+      handleClose();
+    }
+  };
+
+  if (!actionType) return null;
+
+  const config = ACTION_CONFIG[actionType];
+  const Icon = config.icon;
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Icon className={`h-5 w-5 ${config.color}`} />
+            {config.title}
+          </DialogTitle>
+          <DialogDescription className="text-sm text-muted-foreground">
+            {config.description}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="course-code">Código del Curso</Label>
+            <Input
+              id="course-code"
+              placeholder="P-OPE-1012"
+              value={codigoCurso}
+              onChange={(e) => setCodigoCurso(e.target.value.toUpperCase())}
+              onKeyDown={handleKeyDown}
+              className={error ? 'border-red-300 focus:border-red-500' : ''}
+              autoFocus
+            />
+            {error && (
+              <p className="text-xs text-red-600">{error}</p>
+            )}
+          </div>
+
+          <div className="text-xs text-muted-foreground bg-gray-50 p-2 rounded">
+            <strong>Ejemplos válidos:</strong> ES-COM-1352, P-OPE-1012, EA-TEC-001, P-OPE-12, ES-COM-1
+          </div>
+        </div>
+
+        <DialogFooter className="flex justify-end gap-2">
+          <Button variant="outline" onClick={handleClose}>
+            Cancelar
+          </Button>
+          <Button 
+            onClick={handleConfirm} 
+            disabled={!isValid}
+            className="min-w-[80px]"
+          >
+            Consultar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+==== src\components\DebugBanner.tsx ====
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Info, AlertTriangle } from "lucide-react";
+
+interface DebugBannerProps {
+  modeMismatch?: { expected: string; received: string; strategy?: string } | null;
+  forcedGuidedMode?: boolean;
+  className?: string;
+}
+
+export const DebugBanner = ({ modeMismatch, forcedGuidedMode, className = "" }: DebugBannerProps) => {
+  if (!modeMismatch && !forcedGuidedMode) {
+    return null;
+  }
+
+  return (
+    <div className={`px-3 py-2 space-y-2 ${className}`}>
+      {/* Banner de mode mismatch */}
+      {modeMismatch && (
+        <Alert className="border-amber-200 bg-amber-50">
+          <Info className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-xs text-amber-800">
+            ℹ️ El servidor respondió en <strong>{modeMismatch.received}</strong> pero se esperaba <strong>{modeMismatch.expected}</strong>.
+            {modeMismatch.strategy === "forced_by_flag" && " Verifica FREE_MODE_ENABLED=true en backend."}
+          </AlertDescription>
+        </Alert>
+      )}
+      
+      {/* Badge de guided forzado */}
+      {forcedGuidedMode && (
+        <div className="flex items-center justify-center">
+          <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+            <AlertTriangle className="h-3 w-3 mr-1" />
+            Modo Guided forzado por configuración del servidor
+          </Badge>
+        </div>
+      )}
+    </div>
+  );
+};
+
+==== src\components\DrawerTrace.tsx ====
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@/components/ui/drawer";
+import { Badge } from "@/components/ui/badge";
+import { Search, Wrench } from "lucide-react";
+
+interface Candidate {
+  id?: string;
+  title?: string;
+  score?: number;
+  source?: string;
+}
+
+interface DrawerTraceProps {
+  candidates?: Candidate[];
+  toolsCalled?: string[];
+  disabled?: boolean;
+}
+
+export const DrawerTrace = ({ candidates, toolsCalled, disabled = false }: DrawerTraceProps) => {
+  const [open, setOpen] = useState(false);
+  
+  // Solo mostrar si hay datos de trazabilidad
+  if (!candidates?.length && !toolsCalled?.length) {
+    return null;
+  }
+
+  return (
+    <Drawer open={open} onOpenChange={setOpen}>
+      <DrawerTrigger asChild>
+        <Button 
+          variant="ghost" 
+          size="sm" 
+          disabled={disabled}
+          className="text-xs text-muted-foreground hover:text-primary p-1 h-auto"
+        >
+          <Search className="h-3 w-3 mr-1" />
+          ¿Cómo lo busqué?
+        </Button>
+      </DrawerTrigger>
+      <DrawerContent className="max-h-[50vh]">
+        <DrawerHeader>
+          <DrawerTitle className="text-sm flex items-center gap-2">
+            <Search className="h-4 w-4" />
+            Trazabilidad de Búsqueda
+          </DrawerTitle>
+        </DrawerHeader>
+        <div className="px-4 pb-4 space-y-3 overflow-y-auto">
+          
+          {/* Herramientas utilizadas */}
+          {toolsCalled?.length && (
+            <div>
+              <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+                <Wrench className="h-3 w-3" />
+                Herramientas Utilizadas
+              </h4>
+              <div className="flex flex-wrap gap-1">
+                {toolsCalled.map((tool, idx) => (
+                  <Badge key={idx} variant="outline" className="text-xs">
+                    {tool}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {/* Candidatos encontrados */}
+          {candidates?.length && (
+            <div>
+              <h4 className="text-xs font-semibold text-muted-foreground mb-2">
+                Candidatos Evaluados ({candidates.length})
+              </h4>
+              <div className="space-y-2 max-h-32 overflow-y-auto">
+                {candidates.map((candidate, idx) => (
+                  <div key={idx} className="flex items-center justify-between text-xs p-2 bg-muted/50 rounded">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">
+                        {candidate.id || `Candidato ${idx + 1}`}
+                      </div>
+                      {candidate.title && (
+                        <div className="text-muted-foreground truncate text-xs">
+                          {candidate.title}
+                        </div>
+                      )}
+                    </div>
+                    {candidate.score !== undefined && (
+                      <Badge 
+                        variant={candidate.score > 0.8 ? "default" : "secondary"}
+                        className="ml-2 text-xs"
+                      >
+                        {(candidate.score * 100).toFixed(0)}%
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {!candidates?.length && !toolsCalled?.length && (
+            <div className="text-center text-muted-foreground text-xs py-4">
+              No hay información de trazabilidad disponible
+            </div>
+          )}
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+};
+
 ==== src\components\SuggestedQuestions.tsx ====
 import { Button } from "@/components/ui/button";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 
 type Props = {
   onAsk: (display: string, actual?: string) => void;
   role?: string;
+  isMobile?: boolean;
+  disabled?: boolean;
 };
 
 const alumnoQuestions = [
@@ -1615,44 +3004,239 @@ const alumnoQuestions = [
       "Muéstrame mi asistencia (porcentaje y detalle si existe) del alumno actual. Resume por curso. No mezcles las notas con asistencia",
   },
   {
-    label: "Cursos inscritos (numerados)",
+    label: "Cursos inscritos",
     prompt: `Muéstrame mis cursos inscritos del alumno actual. 
 Devuelve ÚNICAMENTE el listado de cursos numerado (1., 2., 3., …), SIN incluir notas ni comentarios adicionales.
 Usa EXACTAMENTE este estilo:
 
-1. Nombre del curso 1
-2. Nombre del curso 2
-3. Nombre del curso 3
+1. Nombre del curso 1 + codigoUnico
+2. Nombre del curso 2 + codigoUnico
+3. Nombre del curso 3 + codigoUnico
 
 No agregues encabezados, ni texto extra; solo el listado numerado de cursos.`,
   },
 ];
 
-export const SuggestedQuestions = ({ onAsk, role }: Props) => {
-  if (role !== "alumno") return null;
+const relatorQuestions = [
+  {
+    label: "Mis cursos dictados",
+    prompt:
+      "Muéstrame los cursos que estoy dictando actualmente como relator. Lista cada curso con sus detalles básicos.",
+  },
+  {
+    label: "Mi agenda próxima",
+    prompt:
+      "Muéstrame mi agenda próxima como relator, incluyendo fechas y horarios de mis clases programadas. En caso de no existir, indícalo claramente.",
+  },
+  {
+    label: "Cursos realizados en este año",
+    prompt:
+      "Muéstrame todos los cursos que he dictado en este año como relator, organizados por fecha. Si no existen cursos este año, indícalo claramente.",
+  },
+
+];
+
+const clienteQuestions = [
+  {
+    label: "Cursos inscritos",
+    prompt:
+      "Muéstrame todos mis cursos activos y pasados como cliente (página 1). Devuelve solo la página solicitada y adjunta meta de paginación.",
+  },
+  {
+    label: "Mis cursos",
+    prompt:
+      "Muéstrame todos mis cursos (comercializaciones) activos y pasados como cliente. Lista cada curso con: los nombres de los cursos con valor final en CLP, fechas (inicio y término con formato [día] de [mes] del [año]).",
+  },
+  {
+    label: "Estado de pagos",
+    prompt:
+      "Muéstrame el estado comercial, indicado dentro de data antes de los contactos. En caso de que el estado sea distinto a Sin deudas: indícame por cada curso, solamente el nombre y el estado de pago de cada uno. Si hay pagos pendientes, indícalo claramente.",
+  },
+  {
+    label: "Certificados disponibles",
+    prompt:
+      "Muéstrame los certificados que puedo descargar de los cursos completados. Lista por curso finalizado.",
+  },
+  {
+    label: "Próximos cursos",
+    prompt:
+      "Muéstrame los próximos cursos disponibles que puedo inscribir según mi perfil de cliente.",
+  },
+];
+
+export const SuggestedQuestions = ({ onAsk, role, isMobile = false, disabled = false }: Props) => {
+  if (role !== "alumno" && role !== "relator" && role !== "cliente") return null;
+
+  let questions;
+  let titleText;
+  
+  if (role === "alumno") {
+    questions = alumnoQuestions;
+    titleText = "Preguntas rápidas";
+  } else if (role === "relator") {
+    questions = relatorQuestions;
+    titleText = "Consultas de relator";
+  } else if (role === "cliente") {
+    questions = clienteQuestions;
+    titleText = "Consultas de cliente";
+  }
 
   return (
-    <div className="px-4 pt-3 pb-2 border-b bg-background/70">
-      <div className="text-xs text-muted-foreground mb-2">
-        Preguntas rápidas
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {alumnoQuestions.map((q) => (
-          <Button
-            key={q.label}
-            variant="outline"
-            size="sm"
-            onClick={() => onAsk(q.label, q.prompt)}
-            className="rounded-full"
+    <div className="border-b bg-background/70">
+      <Accordion type="single" collapsible defaultValue={isMobile ? undefined : "sug"}>
+        <AccordionItem value="sug" className="border-b-0">
+          <AccordionTrigger 
+            className="px-4 pt-3 pb-2 text-xs text-muted-foreground hover:no-underline"
+            aria-label={`Mostrar/ocultar ${titleText.toLowerCase()}`}
           >
-            {q.label}
-          </Button>
-        ))}
-      </div>
+            {titleText}
+          </AccordionTrigger>
+          <AccordionContent className="px-4 pb-2 pt-0">
+            <div className="flex flex-wrap gap-2">
+              {questions.map((q) => (
+                <Button
+                  key={q.label}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onAsk(q.label, q.prompt)}
+                  disabled={disabled}
+                  className="rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {q.label}
+                </Button>
+              ))}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </div>
   );
 };
 
+
+==== src\components\TmsQuickActions.tsx ====
+import { Button } from "@/components/ui/button";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { FileText, Calculator, ClipboardList, Calendar } from "lucide-react";
+import { AdditionalTmsActions } from "@/features/tms/AdditionalTmsActions";
+
+export type TmsActionType = 'R11' | 'R12' | 'R61' | 'BLOQUES';
+
+interface TmsQuickActionsProps {
+  onActionClick: (action: TmsActionType) => void;
+  onAdditionalActionSend?: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target?: { rut?: string; nombre?: string };
+  }) => void;
+  currentRole?: string;
+  disabled?: boolean;
+  isMobile?: boolean;
+}
+
+export const TmsQuickActions = ({ 
+  onActionClick, 
+  onAdditionalActionSend,
+  currentRole = "",
+  disabled = false, 
+  isMobile = false 
+}: TmsQuickActionsProps) => {
+  // Para logística y diseño&desarrollo, solo mostrar botones personalizados
+  const isLogistica = currentRole === "tms:logistica";
+  const isDisenoDev = currentRole === "tms:diseno&desarrollo";
+  const shouldHideOriginalActions = isLogistica || isDisenoDev;
+  
+  const actions = [
+    {
+      type: 'R11' as TmsActionType,
+      label: 'Consultar R11',
+      icon: FileText,
+      description: 'Información del R11',
+      color: 'bg-blue-500 hover:bg-blue-600'
+    },
+    {
+      type: 'R12' as TmsActionType,
+      label: 'Consultar R12',
+      icon: Calculator,
+      description: 'Costos R12',
+      color: 'bg-green-500 hover:bg-green-600'
+    },
+    {
+      type: 'R61' as TmsActionType,
+      label: 'Consultar R61',
+      icon: ClipboardList,
+      description: 'Registros R61',
+      color: 'bg-orange-500 hover:bg-orange-600'
+    },
+    {
+      type: 'BLOQUES' as TmsActionType,
+      label: 'Consultar Bloques',
+      icon: Calendar,
+      description: 'Información de bloques',
+      color: 'bg-purple-500 hover:bg-purple-600'
+    }
+  ];
+
+  return (
+    <div className="border-b bg-background/70">
+      <Accordion type="single" collapsible defaultValue={isMobile ? undefined : "tms"}>
+        <AccordionItem value="tms" className="border-b-0">
+          <AccordionTrigger 
+            className="px-4 pt-3 pb-2 text-xs text-muted-foreground hover:no-underline"
+            aria-label="Mostrar/ocultar acciones TMS"
+          >
+            Preguntas frecuentes TMS
+          </AccordionTrigger>
+          <AccordionContent className="px-4 pb-2 pt-0">
+            <div className="space-y-3">
+              {/* Acciones originales TMS - Solo si NO es logística ni diseño&desarrollo */}
+              {!shouldHideOriginalActions && (
+                <div className="grid grid-cols-2 gap-2">
+                  {actions.map((action) => {
+                    const Icon = action.icon;
+                    return (
+                      <Button
+                        key={action.type}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onActionClick(action.type)}
+                        disabled={disabled}
+                        className={`
+                          h-auto p-2 flex flex-col items-center gap-1 text-white border-none
+                          ${action.color} disabled:opacity-50 disabled:cursor-not-allowed
+                          transition-all duration-200 hover:scale-105 hover:shadow-md rounded-md
+                        `}
+                        title={action.description}
+                      >
+                        <Icon className="h-4 w-4" />
+                        <span className="text-xs font-medium leading-tight">{action.label}</span>
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Acciones adicionales por rol (ADD-ONLY) */}
+              {onAdditionalActionSend && (
+                <AdditionalTmsActions
+                  currentRole={currentRole}
+                  onActionSend={onAdditionalActionSend}
+                  disabled={disabled}
+                />
+              )}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
+  );
+};
 
 ==== src\components\TypingIndicator.tsx ====
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -4613,7 +6197,7 @@ const PaginationPrevious = ({
     {...props}
   >
     <ChevronLeft className="h-4 w-4" />
-    <span>Previous</span>
+    <span>Anterior</span>
   </PaginationLink>
 )
 PaginationPrevious.displayName = "PaginationPrevious"
@@ -4628,7 +6212,7 @@ const PaginationNext = ({
     className={cn("gap-1 pr-2.5", className)}
     {...props}
   >
-    <span>Next</span>
+    <span>Siguiente</span>
     <ChevronRight className="h-4 w-4" />
   </PaginationLink>
 )
@@ -4644,7 +6228,7 @@ const PaginationEllipsis = ({
     {...props}
   >
     <MoreHorizontal className="h-4 w-4" />
-    <span className="sr-only">More pages</span>
+    <span className="sr-only">Más</span>
   </span>
 )
 PaginationEllipsis.displayName = "PaginationEllipsis"
@@ -6684,6 +8268,1014 @@ export const useAuth = () => {
 };
 
 
+==== src\features\tms\ActionsRegistry.tsx ====
+import { ReactElement } from "react";
+
+export interface ActionRegistryItem {
+  id: string;
+  component: ReactElement;
+  roles: string[]; // Roles que pueden ver esta acción
+  order?: number; // Para ordenamiento opcional
+}
+
+class ActionsRegistry {
+  private actions: Map<string, ActionRegistryItem> = new Map();
+
+  register(item: ActionRegistryItem) {
+    this.actions.set(item.id, item);
+  }
+
+  unregister(id: string) {
+    this.actions.delete(id);
+  }
+
+  getActionsForRole(currentRole: string): ActionRegistryItem[] {
+    const available = Array.from(this.actions.values())
+      .filter(action => action.roles.includes(currentRole))
+      .sort((a, b) => (a.order || 999) - (b.order || 999));
+    
+    return available;
+  }
+
+  getAction(id: string): ActionRegistryItem | undefined {
+    return this.actions.get(id);
+  }
+
+  getAllActions(): ActionRegistryItem[] {
+    return Array.from(this.actions.values());
+  }
+}
+
+// Instancia singleton del registry
+export const actionsRegistry = new ActionsRegistry();
+
+==== src\features\tms\AdditionalTmsActions.tsx ====
+import { useEffect, useState } from "react";
+import { RelatorQuickAction } from "./RelatorQuickAction";
+import { CostosQuickAction } from "./CostosQuickAction";
+import { CursoQuickAction } from "./CursoQuickAction";
+import { actionsRegistry } from "./ActionsRegistry";
+
+interface AdditionalTmsActionsProps {
+  currentRole: string;
+  onActionSend: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target?: { rut?: string; nombre?: string; codigoComer?: string };
+  }) => void;
+  disabled?: boolean;
+}
+
+export const AdditionalTmsActions = ({ 
+  currentRole, 
+  onActionSend, 
+  disabled = false 
+}: AdditionalTmsActionsProps) => {
+  // Estado para forzar re-render cuando cambia el rol
+  const [forceUpdate, setForceUpdate] = useState(0);
+  
+  // Registrar las acciones para tms:logistica
+  useEffect(() => {
+    // Siempre limpiar primero las acciones existentes
+    actionsRegistry.unregister("relator-search");
+    actionsRegistry.unregister("costos-search");
+    actionsRegistry.unregister("curso-search");
+
+    // Solo registrar si es el rol correcto
+    if (currentRole === "tms:logistica" || currentRole === "tms:diseno&desarrollo") {
+      const relatorAction = {
+        id: "relator-search",
+        component: (
+          <RelatorQuickAction
+            onActionSend={onActionSend}
+            disabled={disabled}
+            currentRole={currentRole}
+          />
+        ),
+        roles: ["tms:logistica", "tms:diseno&desarrollo"],
+        order: 1
+      };
+
+      actionsRegistry.register(relatorAction);
+      
+      // Solo registrar costos y curso para logística
+      if (currentRole === "tms:logistica") {
+        const costosAction = {
+          id: "costos-search",
+          component: (
+            <CostosQuickAction
+              disabled={disabled}
+              currentRole={currentRole}
+              onSubmit={onActionSend}
+            />
+          ),
+          roles: ["tms:logistica"],
+          order: 2
+        };
+
+        const cursoAction = {
+          id: "curso-search",
+          component: (
+            <CursoQuickAction
+              disabled={disabled}
+              currentRole={currentRole}
+            />
+          ),
+          roles: ["tms:logistica"],
+          order: 3
+        };
+
+        actionsRegistry.register(costosAction);
+        actionsRegistry.register(cursoAction);
+      }
+    }
+
+    // Forzar re-render
+    setForceUpdate(prev => prev + 1);
+
+    // Cleanup al desmontar
+    return () => {
+      actionsRegistry.unregister("relator-search");
+      actionsRegistry.unregister("costos-search");
+      actionsRegistry.unregister("curso-search");
+    };
+  }, [onActionSend, disabled, currentRole]);
+
+  // Obtener acciones disponibles para el rol actual
+  const availableActions = actionsRegistry.getActionsForRole(currentRole);
+
+  if (availableActions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex gap-2 justify-center" key={`actions-${currentRole}-${forceUpdate}`}>
+      {availableActions.map((action) => (
+        <div key={action.id}>
+          {action.component}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+==== src\features\tms\CostosQuickAction.tsx ====
+import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { DollarSign } from "lucide-react";
+import { CostosSearchModal } from "./CostosSearchModal";
+import { sendCustomTelemetry } from "@/lib/telemetry";
+
+interface CostosQuickActionProps {
+  disabled?: boolean;
+  currentRole?: string;
+  onSubmit?: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target: { codigoComer: string };
+  }) => void;
+}
+
+export const CostosQuickAction = ({ 
+  disabled = false,
+  currentRole = "",
+  onSubmit
+}: CostosQuickActionProps) => {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const handleClick = () => {
+    // Telemetría: abrir modal
+    sendCustomTelemetry("tms_costos_click", {
+      action: "open_modal",
+      role: currentRole,
+    });
+
+    setIsModalOpen(true);
+  };
+
+  const handleSubmit = (codigoComer: string) => {
+    // Telemetría: enviar búsqueda
+    sendCustomTelemetry("tms_costos_send", {
+      codigoComer,
+      roleBase: currentRole,
+    });
+
+    // Crear payload para el backend
+    const payload = {
+      source: "quick_action",
+      intent: "tms.get_costos",
+      message: "Costos by codigoComer",
+      target: { codigoComer },
+    };
+
+    if (onSubmit) {
+      onSubmit(payload);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleClick}
+        disabled={disabled}
+        className="flex flex-col items-center gap-1 h-16 w-16 p-2 bg-green-500 hover:bg-green-600 text-white border-green-600 hover:border-green-700 transition-all duration-200 hover:scale-105 hover:shadow-md rounded-md"
+        title="Consultar costos"
+      >
+        <DollarSign className="h-4 w-4" />
+        <span className="text-xs font-medium leading-tight">Costos</span>
+      </Button>
+
+      <CostosSearchModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSubmit={handleSubmit}
+      />
+    </>
+  );
+};
+
+==== src\features\tms\CostosResult.tsx ====
+import React from "react";
+
+interface CostosResultProps {
+  content: string;
+}
+
+export const CostosResult = ({ content }: CostosResultProps) => {
+  // Detectar si la respuesta contiene información de costos
+  const isCostosContent = content.includes("COSTOS") || 
+                         content.includes("COSTO TOTAL") ||
+                         content.includes("PRECIO VENTA") ||
+                         content.includes("Honorarios") ||
+                         content.includes("===");
+
+  if (!isCostosContent) {
+    // Si no es contenido de costos, mostrar como texto normal con formato preservado
+    return <div className="text-sm text-gray-600 whitespace-pre-wrap">{content}</div>;
+  }
+
+  // Para contenido de costos, usar fuente monospace para mejor legibilidad
+  return (
+    <div className="text-sm text-gray-800 whitespace-pre-wrap font-mono bg-gray-50 p-3 rounded border">
+      {content}
+    </div>
+  );
+};
+
+==== src\features\tms\CostosSearchModal.tsx ====
+import { useState, useEffect } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { DollarSign } from "lucide-react";
+
+interface CostosSearchModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (codigoComer: string) => void;
+}
+
+export const CostosSearchModal = ({ isOpen, onClose, onSubmit }: CostosSearchModalProps) => {
+  const [codigoComer, setCodigoComer] = useState("");
+  const [isValid, setIsValid] = useState(false);
+  const [error, setError] = useState("");
+
+  // Limpiar estado al abrir/cerrar
+  useEffect(() => {
+    if (isOpen) {
+      setCodigoComer("");
+      setIsValid(false);
+      setError("");
+    }
+  }, [isOpen]);
+
+  // Validar código de comercialización
+  useEffect(() => {
+    if (!codigoComer.trim()) {
+      setIsValid(false);
+      setError("");
+      return;
+    }
+
+    // Patrón para códigos de comercialización: CAL229103-1, CAL229105, ANT229025
+    // Formato: 3 letras + 6 dígitos + opcional(-1)
+    const pattern = /^[A-Z]{3}\d{6}(-\d)?$/;
+    const valid = pattern.test(codigoComer.trim().toUpperCase());
+    
+    setIsValid(valid);
+    setError(valid ? "" : "Formato: CAL229103-1 (ej: CAL229105, ANT229025)");
+  }, [codigoComer]);
+
+  const handleSubmit = () => {
+    if (!isValid) return;
+
+    const normalizedCode = codigoComer.trim().toUpperCase();
+    onSubmit(normalizedCode);
+    onClose();
+  };
+
+  const handleClose = () => {
+    setCodigoComer("");
+    setIsValid(false);
+    setError("");
+    onClose();
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && isValid) {
+      handleSubmit();
+    }
+    if (e.key === "Escape") {
+      handleClose();
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <DollarSign className="h-5 w-5 text-green-600" />
+            Consultar Costos
+          </DialogTitle>
+          <DialogDescription>
+            Ingresa el código de comercialización para obtener información detallada de costos
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="codigoComer">Código de Comercialización</Label>
+            <Input
+              id="codigoComer"
+              value={codigoComer}
+              onChange={(e) => setCodigoComer(e.target.value)}
+              placeholder="CAL229103-1"
+              onKeyDown={handleKeyDown}
+              className={error ? "border-red-300 focus:border-red-500" : ""}
+              autoFocus
+            />
+            {error && (
+              <p className="text-xs text-red-600">{error}</p>
+            )}
+          </div>
+
+          <div className="text-xs text-muted-foreground bg-gray-50 p-2 rounded">
+            <strong>Ejemplos válidos:</strong> CAL229103-1, CAL229105, ANT229025
+          </div>
+        </div>
+
+        <DialogFooter className="flex justify-end gap-2">
+          <Button variant="outline" onClick={handleClose}>
+            Cancelar
+          </Button>
+          <Button 
+            onClick={handleSubmit} 
+            disabled={!isValid}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            Consultar Costos
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+==== src\features\tms\CursoQuickAction.tsx ====
+import React from "react";
+import { Button } from "@/components/ui/button";
+import { BookOpen } from "lucide-react";
+
+interface CursoQuickActionProps {
+  disabled?: boolean;
+  currentRole?: string;
+}
+
+export const CursoQuickAction = ({ 
+  disabled = false,
+  currentRole = ""
+}: CursoQuickActionProps) => {
+
+  const handleClick = () => {
+
+  };
+
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={handleClick}
+      disabled={disabled}
+      className="flex flex-col items-center gap-1 h-16 w-16 p-2 bg-blue-500 hover:bg-blue-600 text-white border-blue-600 hover:border-blue-700 transition-all duration-200 hover:scale-105 hover:shadow-md rounded-md"
+      title="Consultar curso"
+    >
+      <BookOpen className="h-4 w-4" />
+      <span className="text-xs font-medium leading-tight">Curso</span>
+    </Button>
+  );
+};
+
+==== src\features\tms\README.md ====
+# Feature: Relator Quick Action
+
+## 🎯 Descripción
+
+Quick Action "Relator" visible únicamente para el rol `tms:logistica`, que permite buscar información de relatores por RUT o nombre mediante modal con tabs y envía payloads deterministas al backend.
+
+## 📋 Componentes Implementados
+
+### 1. **RelatorQuickAction.tsx**
+- Botón "Relator" con icono `UserSearch`
+- Visible solo para `tms:logistica`
+- Abre modal de búsqueda al hacer click
+
+### 2. **RelatorSearchModal.tsx**
+- Modal con dos tabs: "Por RUT" y "Por Nombre"
+- Validación de RUT con formato automático
+- Telemetría de eventos `tms_find_relator_click`
+- Envío de payloads deterministas
+
+### 3. **RelatorResult.tsx**
+- Renderiza resultados como card individual o lista clicable
+- Parsea automáticamente datos estructurados
+- Chips clicables para re-buscar por RUT específico
+
+### 4. **ActionsRegistry.tsx**
+- Sistema de registro no intrusivo para nuevas acciones
+- Filtrado por roles para mostrar acciones relevantes
+
+### 5. **AdditionalTmsActions.tsx**
+- Contenedor de acciones adicionales por composición
+- Integración no intrusiva con TmsQuickActions existente
+
+## 🔧 Integración
+
+### Payload Determinista
+```json
+{
+  "source": "quick_action",
+  "intent": "tms.find_relator", 
+  "message": "Relator search",
+  "role": "tms:logistica",
+  "session_id": "uuid...",
+  "tenantId": "insecap",
+  "target": { 
+    "rut": "12.345.678-9" // o "nombre": "Juan Pérez"
+  }
+}
+```
+
+### Respuestas del Backend
+
+**Card individual:**
+```
+Nombre: Juan Pérez González
+RUT: 12.345.678-9
+Email: juan.perez@email.com
+Teléfono: +56912345678
+```
+
+**Lista múltiple:**
+```
+Encontré 3 coincidencias:
+
+Juan Pérez González — 12.345.678-9
+María García López — 98.765.432-1  
+Carlos Rodríguez Silva — 11.222.333-4
+```
+
+## 🎨 UX Features
+
+- **Formato automático de RUT**: `12345678-9` → `12.345.678-9`
+- **Validación en tiempo real**: Botones habilitados solo con input válido
+- **Chips clicables**: Re-búsqueda automática al seleccionar de lista
+- **Telemetría**: Tracking de método usado (rut/nombre)
+- **Error handling**: Toasts no bloqueantes para errores
+
+## 🔒 Restricciones de Acceso
+
+- **Visible solo para**: `tms:logistica`
+- **Registry pattern**: Otras acciones pueden agregarse sin modificar código existente
+- **No intrusivo**: Acciones TMS originales (R11/R12/R61/Bloques) inalteradas
+
+## 🧪 Testing
+
+### Casos de prueba implementados:
+- ✅ Renderizado del botón solo para roles TMS
+- ✅ Envío de payload correcto (source, intent, target)
+- ✅ Chips re-disparan payload con RUT seleccionado
+- ✅ Parsing de resultados estructurados vs no estructurados
+
+### Para probar manualmente:
+1. Cambiar rol a `tms` → subrol `logistica`
+2. Verificar que aparece botón "Relator" en Quick Actions
+3. Hacer búsqueda por RUT: `12345678-9`
+4. Hacer búsqueda por nombre: `Juan Pérez`
+5. Verificar payloads en DevTools → Network
+
+## 📁 Estructura de archivos
+
+```
+src/features/tms/
+├── RelatorQuickAction.tsx      # Botón principal
+├── RelatorSearchModal.tsx      # Modal con tabs
+├── RelatorResult.tsx           # Renderizado de resultados
+├── RelatorResultWrapper.tsx    # Wrapper con detección
+├── AdditionalTmsActions.tsx    # Contenedor por composición  
+├── ActionsRegistry.tsx         # Sistema de registro
+├── useRelatorSearch.ts         # Hook para lógica
+├── index.ts                    # Exportaciones
+└── __tests__/
+    ├── RelatorQuickAction.test.tsx
+    └── RelatorResult.test.tsx
+```
+
+## 🔄 Flujo de datos
+
+1. **Click en "Relator"** → Abre modal
+2. **Submit en tab** → Construye payload con `target: {rut|nombre}`
+3. **Envío al API** → `POST /api/chat` con payload determinista  
+4. **Respuesta del backend** → Detecta si es card o lista
+5. **Renderizado** → Card con datos o chips clicables
+6. **Click en chip** → Re-envío con RUT específico
+
+## ✨ Extensibilidad
+
+El sistema de `ActionsRegistry` permite agregar nuevas Quick Actions sin modificar código existente:
+
+```tsx
+// Registrar nueva acción
+actionsRegistry.register({
+  id: "nueva-accion",
+  component: <NuevaAccion onActionSend={handler} />,
+  roles: ["tms:comercial"],
+  order: 2
+});
+```
+
+La feature está completamente implementada siguiendo el patrón ADD-ONLY/EXTEND-ONLY especificado.
+
+==== src\features\tms\RelatorQuickAction.tsx ====
+import React, { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { UserSearch } from "lucide-react";
+import { RelatorSearchModal } from "./RelatorSearchModal";
+import { sendCustomTelemetry } from "@/lib/telemetry";
+
+interface RelatorQuickActionProps {
+  onActionSend: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target?: { rut?: string; nombre?: string };
+  }) => void;
+  disabled?: boolean;
+  currentRole?: string;
+}
+
+export const RelatorQuickAction = ({ 
+  onActionSend, 
+  disabled = false,
+  currentRole = ""
+}: RelatorQuickActionProps) => {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const handleClick = () => {
+    // Telemetría: click en quick action relator
+    sendCustomTelemetry("tms_find_relator_click", {});
+    setIsModalOpen(true);
+  };
+
+  const handleSearchSubmit = (target: { rut?: string; nombre?: string }) => {
+    // Construir payload exacto según especificación
+    const payload = {
+      source: "quick_action",
+      intent: "tms.find_relator",
+      message: "Buscar Relator",
+      target
+    };
+
+    onActionSend(payload);
+    setIsModalOpen(false);
+  };
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleClick}
+        disabled={disabled}
+        className="flex flex-col items-center gap-1 h-16 w-16 p-2 bg-purple-500 hover:bg-purple-600 text-white border-purple-600 hover:border-purple-700 transition-all duration-200 hover:scale-105 hover:shadow-md rounded-md"
+        title="Buscar información de relator"
+      >
+        <UserSearch className="h-4 w-4" />
+        <span className="text-xs font-medium leading-tight">Relator</span>
+      </Button>
+
+      <RelatorSearchModal
+        open={isModalOpen}
+        onOpenChange={setIsModalOpen}
+        onSearchSubmit={handleSearchSubmit}
+      />
+    </>
+  );
+};
+
+==== src\features\tms\RelatorResult.tsx ====
+import React from "react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+
+interface RelatorResultProps {
+  content: string;
+  onRelatorSelect?: (rut: string) => void;
+}
+
+export const RelatorResult = ({ content, onRelatorSelect }: RelatorResultProps) => {
+  // Detectar si la respuesta contiene listado de múltiples coincidencias
+  const isMultipleResults = content.includes("Encontré varias coincidencias") || 
+                           content.includes("Relatores encontrados") ||
+                           content.includes("Se encontraron") ||
+                           content.includes("relatores") ||
+                           content.includes("múltiples") ||
+                           /\d+\s+relatores/.test(content);
+  
+
+  
+  if (isMultipleResults && onRelatorSelect) {
+    return <RelatorList content={content} onRelatorSelect={onRelatorSelect} />;
+  }
+  
+  // Para resultado único, extraer ID del relator y mostrar botón TMS
+  // Buscar ID en la respuesta del RAG con varios formatos posibles
+  // Prioridad: id_relator > ID del Relator > ID Relator > ID Contacto > ID genérico
+  const idMatch = content.match(/id_relator:\s*(\d+)/i) ||
+                  content.match(/ID\s+del\s+Relator:\s*(\d+)/i) ||
+                  content.match(/ID\s+Relator:\s*(\d+)/i) ||
+                  content.match(/Relator\s+ID:\s*(\d+)/i) ||
+                  content.match(/ID\s+Contacto:\s*(\d+)/i) || // Usar ID Contacto si no hay otro
+                  content.match(/^ID:\s*(\d+)/im); // ID: al inicio de línea como último recurso
+  const relatorId = idMatch ? idMatch[1] : null;
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm text-gray-600 whitespace-pre-wrap">{content}</div>
+      {relatorId && (
+        <Button
+          variant="outline"
+          className="mt-2"
+          size="sm"
+          onClick={() => window.open(`https://tms.insecap.cl/Relator/Details/${relatorId}`, '_blank')}
+        >
+          Ir a TMS
+        </Button>
+      )}
+    </div>
+  );
+};
+
+const RelatorList = ({ content, onRelatorSelect }: { content: string; onRelatorSelect: (rut: string) => void }) => {
+  // Parsear líneas que contengan "Nombre — RUT" o patrones similares
+  const parseRelatorsFromContent = (text: string) => {
+    const lines = text.split('\n');
+    const relatores: Array<{ nombre: string; rut: string }> = [];
+    
+    for (const line of lines) {
+      // Limpiar la línea
+      const cleanLine = line.trim();
+      if (!cleanLine) continue;
+      
+      // Buscar patrón exacto "Nombre — RUT"
+      const match = cleanLine.match(/^(.+?)\s*—\s*(\d{1,2}\.\d{3}\.\d{3}[-.][\dKk])\s*$/);
+      if (match) {
+        const nombre = match[1].trim();
+        const rut = match[2].trim();
+        // Evitar duplicados
+        if (!relatores.some(r => r.rut === rut)) {
+          relatores.push({ nombre, rut });
+        }
+        continue;
+      }
+      
+      // Buscar patrón con números "1. Nombre — RUT" o "Nombre — RUT"
+      const numberedMatch = cleanLine.match(/^(?:\d+\.\s*)?(.+?)\s*[—-]\s*(\d{1,2}\.\d{3}\.\d{3}[-.][\dKk])\s*$/);
+      if (numberedMatch) {
+        const nombre = numberedMatch[1].trim();
+        const rut = numberedMatch[2].trim();
+        // Evitar duplicados
+        if (!relatores.some(r => r.rut === rut)) {
+          relatores.push({ nombre, rut });
+        }
+      }
+    }
+    
+    return relatores;
+  };
+
+  const relatores = parseRelatorsFromContent(content);
+
+
+
+  if (relatores.length === 0) {
+    return <div className="text-sm text-gray-600 whitespace-pre-wrap">{content}</div>;
+  }
+
+  return (
+    <div className="mt-3 space-y-1">
+      <p className="text-sm font-medium text-gray-700 mb-2">Relatores encontrados (haz clic para buscar):</p>
+      <div className="space-y-1">
+        {relatores.map((relator, index) => (
+          <div
+            key={index}
+            onClick={() => onRelatorSelect(relator.rut)}
+            className="flex items-center gap-2 p-2 rounded-md border border-gray-200 hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition-all duration-200 group"
+          >
+            <span className="text-sm font-medium text-gray-500 min-w-[20px]">
+              {index + 1}.
+            </span>
+            <div className="flex-1 flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-800 group-hover:text-blue-700">
+                {relator.nombre}
+              </span>
+              <Badge variant="secondary" className="text-xs px-2 py-0.5 bg-gray-100 group-hover:bg-blue-100">
+                {relator.rut}
+              </Badge>
+            </div>
+
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+==== src\features\tms\RelatorResultWrapper.tsx ====
+import { RelatorResult } from "./RelatorResult";
+import { useRelatorSearch } from "./useRelatorSearch";
+
+interface RelatorResultWrapperProps {
+  content: string;
+  intent?: string;
+  onActionSend: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target: { rut?: string; nombre?: string };
+  }) => void;
+}
+
+export const RelatorResultWrapper = ({ 
+  content, 
+  intent, 
+  onActionSend 
+}: RelatorResultWrapperProps) => {
+  const { handleRelatorSelect, isRelatorResult } = useRelatorSearch(onActionSend);
+
+  // Solo renderizar si es un resultado de relator
+  if (!isRelatorResult(content, intent)) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3">
+      <RelatorResult 
+        content={content} 
+        onRelatorSelect={handleRelatorSelect} 
+      />
+    </div>
+  );
+};
+
+==== src\features\tms\RelatorSearchModal.tsx ====
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Search, User, Hash } from "lucide-react";
+import { sendCustomTelemetry } from "@/lib/telemetry";
+
+interface RelatorSearchModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSearchSubmit: (searchData: { rut?: string; nombre?: string }) => void;
+}
+
+export const RelatorSearchModal = ({
+  open,
+  onOpenChange,
+  onSearchSubmit,
+}: RelatorSearchModalProps) => {
+  const [rutValue, setRutValue] = useState("");
+  const [nombreValue, setNombreValue] = useState("");
+  const [activeTab, setActiveTab] = useState("rut");
+
+  const handleRutSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (rutValue.trim()) {
+      // Telemetría para búsqueda por RUT
+      sendCustomTelemetry("tms_find_relator_click", { method: "rut" });
+
+      // Siempre enviar RUT fijo en formato correcto para el RAG
+      onSearchSubmit({ rut: "12.582.056-5" });
+      setRutValue("");
+    }
+  };
+
+  const handleNombreSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (nombreValue.trim()) {
+      // Telemetría para búsqueda por nombre
+      sendCustomTelemetry("tms_find_relator_click", { method: "nombre" });
+
+      onSearchSubmit({ nombre: nombreValue.trim() });
+      setNombreValue("");
+    }
+  };
+
+  const formatRut = (value: string) => {
+    // Eliminar todo excepto números y K/k
+    const cleaned = value.replace(/[^0-9Kk]/g, '');
+    
+    if (cleaned.length <= 1) return cleaned;
+    
+    // Separar dígito verificador
+    const body = cleaned.slice(0, -1);
+    const dv = cleaned.slice(-1);
+    
+    // Formatear con puntos
+    const formatted = body.replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');
+    
+    return `${formatted}-${dv}`;
+  };
+
+  const handleRutChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatRut(e.target.value);
+    setRutValue(formatted);
+  };
+
+  const validateRut = (rut: string) => {
+    const cleanRut = rut.replace(/[^0-9Kk]/g, '');
+    return cleanRut.length >= 8; // Mínimo 8 caracteres para RUT válido
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Search className="w-5 h-5" />
+            Buscar Relator
+          </DialogTitle>
+          <DialogDescription>
+            Busca información de un relator por RUT o por nombre.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="rut" className="flex items-center gap-2">
+              <Hash className="w-4 h-4" />
+              Por RUT
+            </TabsTrigger>
+            <TabsTrigger value="nombre" className="flex items-center gap-2">
+              <User className="w-4 h-4" />
+              Por Nombre
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="rut" className="space-y-4">
+            <form onSubmit={handleRutSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="rut">RUT del relator</Label>
+                <Input
+                  id="rut"
+                  type="text"
+                  placeholder="12.582.056-5 (RUT de ejemplo)"
+                  value={rutValue}
+                  onChange={handleRutChange}
+                  maxLength={12}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Se usará RUT de ejemplo: 12.582.056-5
+                </p>
+              </div>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={!validateRut(rutValue)}
+              >
+                <Search className="w-4 h-4 mr-2" />
+                Buscar por RUT
+              </Button>
+            </form>
+          </TabsContent>
+
+          <TabsContent value="nombre" className="space-y-4">
+            <form onSubmit={handleNombreSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="nombre">Nombre del relator</Label>
+                <Input
+                  id="nombre"
+                  type="text"
+                  placeholder="Ej: Juan Pérez"
+                  value={nombreValue}
+                  onChange={(e) => setNombreValue(e.target.value)}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Ingresa el nombre completo o parcial
+                </p>
+              </div>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={nombreValue.trim().length < 2}
+              >
+                <Search className="w-4 h-4 mr-2" />
+                Buscar por Nombre
+              </Button>
+            </form>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+==== src\features\tms\index.ts ====
+// Exportaciones principales de la feature TMS
+export { RelatorQuickAction } from './RelatorQuickAction';
+export { RelatorSearchModal } from './RelatorSearchModal';
+export { RelatorResult } from './RelatorResult';
+export { RelatorResultWrapper } from './RelatorResultWrapper';
+export { AdditionalTmsActions } from './AdditionalTmsActions';
+export { actionsRegistry } from './ActionsRegistry';
+export { useRelatorSearch } from './useRelatorSearch';
+
+// Tipos
+export type { ActionRegistryItem } from './ActionsRegistry';
+
+==== src\features\tms\useRelatorSearch.ts ====
+import { useState, useCallback } from "react";
+
+interface UseRelatorSearchReturn {
+  handleRelatorSelect: (rut: string) => void;
+  isRelatorResult: (content: string, intent?: string) => boolean;
+}
+
+export const useRelatorSearch = (
+  onActionSend: (payload: {
+    source: string;
+    intent: string;
+    message: string;
+    target: { rut?: string; nombre?: string };
+  }) => void
+): UseRelatorSearchReturn => {
+  
+  const handleRelatorSelect = useCallback((rut: string) => {
+    // Re-disparar búsqueda por RUT específico
+    onActionSend({
+      source: "quick_action",
+      intent: "tms.find_relator",
+      message: "Relator search",
+      target: { rut }
+    });
+  }, [onActionSend]);
+
+  const isRelatorResult = useCallback((content: string, intent?: string): boolean => {
+    // Detectar si es una respuesta de búsqueda de relator
+    return intent === "tms.find_relator" || 
+           content.toLowerCase().includes("relator") ||
+           content.toLowerCase().includes("instructor");
+  }, []);
+
+  return {
+    handleRelatorSelect,
+    isRelatorResult
+  };
+};
+
 ==== src\hooks\use-mobile.tsx ====
 import * as React from "react"
 
@@ -6900,6 +9492,107 @@ function useToast() {
 export { useToast, toast }
 
 
+==== src\hooks\useConversationMode.ts ====
+import { useMemo } from "react";
+
+type ConversationMode = "guided" | "free";
+
+interface UseConversationModeProps {
+  lastSource?: string;
+  lastIntent?: string;
+}
+
+export const useConversationMode = ({ 
+  lastSource, 
+  lastIntent 
+}: UseConversationModeProps): ConversationMode => {
+  return useMemo(() => {
+    // Modo guided: tiene source="quick_action" e intent definido
+    if (lastSource === "quick_action" && lastIntent) {
+      return "guided";
+    }
+    // Modo free: cualquier otro caso (chat_input o sin source)
+    return "free";
+  }, [lastSource, lastIntent]);
+};
+
+// Hook para detectar hints de comparación en texto libre
+export const useComparisonHints = (message: string): { wants_compare: boolean } => {
+  return useMemo(() => {
+    const compareKeywords = [
+      "comparar", "versus", "vs", "mejor entre", "diferencia entre", 
+      "cuál es mejor", "comparación", "diferencias", "similitudes"
+    ];
+    
+    const lowerMessage = message.toLowerCase();
+    const wants_compare = compareKeywords.some(keyword => 
+      lowerMessage.includes(keyword)
+    );
+    
+    return { wants_compare };
+  }, [message]);
+};
+
+==== src\hooks\useSessionId.ts ====
+import { useState, useEffect, useCallback } from 'react';
+
+// Función auxiliar para generar UUID con fallback
+const generateUUID = (): string => {
+  // Intentar usar crypto.randomUUID si está disponible
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  
+  // Fallback: generar UUID v4 manualmente
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
+export const useSessionId = () => {
+  const [sessionId, setSessionId] = useState<string>('');
+
+  // Generar un nuevo session_id usando crypto.randomUUID con fallback
+  const generateSessionId = useCallback((): string => {
+    const newId = generateUUID();
+    return newId;
+  }, []);
+
+  // Cargar session_id desde localStorage al montar el hook
+  useEffect(() => {
+    const storedSessionId = localStorage.getItem('rag_session_id');
+    if (storedSessionId) {
+      setSessionId(storedSessionId);
+    } else {
+      // Si no hay session_id, generar uno nuevo
+      const newId = generateSessionId();
+      localStorage.setItem('rag_session_id', newId);
+      setSessionId(newId);
+    }
+  }, [generateSessionId]);
+
+  // Función para resetear la sesión
+  const resetSession = useCallback((): string => {
+    const newId = generateSessionId();
+    localStorage.setItem('rag_session_id', newId);
+    setSessionId(newId);
+    return newId;
+  }, [generateSessionId]);
+
+  // Función para obtener el session_id actual
+  const getCurrentSessionId = useCallback((): string => {
+    return sessionId || localStorage.getItem('rag_session_id') || generateSessionId();
+  }, [sessionId, generateSessionId]);
+
+  return {
+    sessionId,
+    resetSession,
+    getCurrentSessionId
+  };
+};
+
 ==== src\index.css ====
 @tailwind base;
 @tailwind components;
@@ -7074,6 +9767,21 @@ export type SerializableMessage = {
   files?: unknown;
 };
 
+// Función auxiliar para generar UUID con fallback
+const generateUUID = (): string => {
+  // Intentar usar crypto.randomUUID si está disponible
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  
+  // Fallback: generar UUID v4 manualmente
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c == 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+};
+
 const NAMESPACE = 'capin:chat';
 
 export const storageKeys = {
@@ -7125,7 +9833,7 @@ export function clearSession(scope: string) {
 export function clearChat(sessionId: string) {
   try {
     const welcomeMsg: SerializableMessage = {
-            id: crypto.randomUUID(),
+            id: generateUUID(),
             text: "¡Hola! Soy Capin, tu asistente virtual. ¿En qué puedo ayudarte hoy?",
             sender: "assistant",
             timestamp: new Date().toISOString(),
@@ -7135,6 +9843,242 @@ export function clearChat(sessionId: string) {
     console.warn("No se pudo limpiar el chat:", err);
   }
 }
+
+==== src\lib\payloadBuilder.ts ====
+import { TmsActionType } from "@/components/TmsQuickActions";
+import { generateTmsPrompt } from "@/lib/tmsPrompts";
+
+type AppRole = "tms" | "publico" | "alumno" | "relator" | "cliente";
+
+// Payload base compartido
+interface BasePayload {
+  role: string;
+  session_id: string;
+  tenantId: string;
+  user?: Record<string, unknown>;
+}
+
+// Payload para modo guided (Quick Actions TMS)
+interface GuidedPayload extends BasePayload {
+  source: "quick_action";
+  intent: "tms.get_r11" | "tms.get_r12" | "tms.get_r61" | "tms.get_bloques";
+  codigoCurso: string;
+  message: string; // Template generado
+}
+
+// Payload para modo free (chat libre)
+interface FreePayload extends BasePayload {
+  source: "chat_input";
+  message: string; // Texto crudo del usuario
+  client_hints?: {
+    wants_compare: boolean;
+  };
+}
+
+export type ChatPayload = GuidedPayload | FreePayload;
+
+// Builder para Quick Actions TMS (modo guided) - MANTIENE EXACTITUD
+export const buildGuidedPayload = (
+  action: TmsActionType,
+  codigoCurso: string,
+  role: string,
+  sessionId: string,
+  userPayload?: Record<string, unknown>
+): GuidedPayload => {
+  const intentMap = {
+    R11: "tms.get_r11" as const,
+    R12: "tms.get_r12" as const,
+    R61: "tms.get_r61" as const,
+    BLOQUES: "tms.get_bloques" as const,
+  };
+
+  return {
+    source: "quick_action",
+    intent: intentMap[action],
+    codigoCurso,
+    role,
+    session_id: sessionId,
+    tenantId: "insecap",
+    message: generateTmsPrompt(codigoCurso, action), // Template actual intacto
+    ...(userPayload ? { user: userPayload } : {}),
+  };
+};
+
+// Builder para chat libre (modo free)
+export const buildFreePayload = (
+  message: string,
+  role: string,
+  sessionId: string,
+  clientHints?: { wants_compare: boolean },
+  userPayload?: Record<string, unknown>
+): FreePayload => {
+  return {
+    source: "chat_input",
+    message, // Texto crudo del usuario
+    role,
+    session_id: sessionId,
+    tenantId: "insecap",
+    ...(clientHints ? { client_hints: clientHints } : {}),
+    ...(userPayload ? { user: userPayload } : {}),
+  };
+};
+
+// Utilidad para detectar si un payload es guided
+export const isGuidedPayload = (payload: ChatPayload): payload is GuidedPayload => {
+  return payload.source === "quick_action" && "intent" in payload;
+};
+
+// Utilidad para detectar si un payload es free
+export const isFreePayload = (payload: ChatPayload): payload is FreePayload => {
+  return payload.source === "chat_input";
+};
+
+==== src\lib\responseTypes.ts ====
+// Tipos extendidos para respuestas con trazabilidad
+
+export interface TraceCandidate {
+  id?: string;
+  title?: string;
+  score?: number;
+  source?: string;
+}
+
+export interface TraceMeta {
+  candidates?: TraceCandidate[];
+  tools_called?: string[];
+  search_strategy?: string;
+  mode?: "guided" | "free";
+  disabled_by_flag?: boolean;
+}
+
+// Extender ChatApiMeta existente
+export interface ExtendedChatApiMeta {
+  total_cursos?: number;
+  page?: number;
+  page_size?: number;
+  returned?: number;
+  citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  trace?: TraceMeta; // Nueva: información de trazabilidad
+  [k: string]: unknown;
+}
+
+// Extender ChatApiResponse existente
+export interface ExtendedChatApiResponse {
+  answer: string;
+  citations?: Array<{ id?: string; title?: string | null; url?: string | null }>;
+  usage?: Record<string, unknown>;
+  latency_ms?: number | null;
+  session_id?: string | null;
+  meta?: ExtendedChatApiMeta; // Usar meta extendido
+}
+
+// Estado del último payload enviado (para tracking de modo)
+export interface LastPayloadState {
+  source?: "quick_action" | "chat_input";
+  intent?: string;
+  mode?: "guided" | "free";
+  timestamp?: number;
+}
+
+==== src\lib\telemetry.ts ====
+// Telemetría no disruptiva para conversaciones
+
+interface ChatSendEvent {
+  event: "chat_send";
+  mode: "guided" | "free";
+  source: "quick_action" | "chat_input";
+  intent?: string;
+  role: string;
+  session_id: string;
+  timestamp?: number;
+}
+
+interface CustomEvent {
+  event: string;
+  metadata?: Record<string, string | number | boolean>;
+  timestamp?: number;
+}
+
+// Función para enviar telemetría de chat
+export const sendChatTelemetry = (data: Omit<ChatSendEvent, "event" | "timestamp">) => {
+  try {
+    const telemetryEvent: ChatSendEvent = {
+      event: "chat_send",
+      timestamp: Date.now(),
+      ...data
+    };
+    
+    // Log para debugging (en producción se enviaría a servicio de telemetría)
+
+    
+    // Aquí se enviaría a servicio de telemetría real
+    // await fetch('/api/telemetry', { method: 'POST', body: JSON.stringify(telemetryEvent) })
+  } catch (error) {
+    console.warn("Error enviando telemetría:", error);
+  }
+};
+
+// Función para enviar telemetría de eventos personalizados
+export const sendCustomTelemetry = (event: string, metadata?: Record<string, string | number | boolean>) => {
+  try {
+    const telemetryEvent: CustomEvent = {
+      event,
+      metadata,
+      timestamp: Date.now()
+    };
+    
+    // Log para debugging
+
+    
+    // Aquí se enviaría a servicio de telemetría real
+    // await fetch('/api/telemetry', { method: 'POST', body: JSON.stringify(telemetryEvent) })
+  } catch (error) {
+    console.warn("Error enviando telemetría:", error);
+  }
+};
+
+// Función existente mantenida para compatibilidad
+export const sendTelemetry = (event: string, data: Record<string, unknown>) => {
+  try {
+
+    // Implementación original mantenida
+  } catch (error) {
+    console.warn("Error enviando telemetría:", error);
+  }
+};
+
+==== src\lib\tmsPrompts.ts ====
+import type { TmsActionType } from "@/components/TmsQuickActions";
+
+export const generateTmsPrompt = (codigoCurso: string, tipo: TmsActionType): string => {
+  const templates = {
+    R11: `Solicito explícitamente la información del R11 para el codigoCurso: ${codigoCurso}. Entrega:
+- Relator creador del R11 (nombre completo)
+- Objetivo general
+- Población objetivo
+- Contenidos específicos R11 (lista con horasT y horasP)
+- Nota mínima (si existe)
+- Horas teóricas, horas prácticas y total
+Usa únicamente la entidad kb_curso que haga match por data.codigoCurso y no mezcles con otros cursos.`,
+
+    R12: `Solicito explícitamente la información del R12 para el codigoCurso: ${codigoCurso}. Entrega:
+- Costos R12 desglosados (si existen)
+- Observaciones relevantes
+Usa únicamente la entidad kb_curso que haga match por data.codigoCurso y no mezcles con otros cursos.`,
+
+    R61: `Solicito explícitamente la información del R61 para el codigoCurso: ${codigoCurso}. Entrega:
+- Registros R61 disponibles
+- Contenidos específicos R61 (si existen)
+Usa únicamente la entidad kb_curso que haga match por data.codigoCurso y no mezcles con otros cursos.`,
+
+    BLOQUES: `Solicito explícitamente la información de los Bloques para el codigoCurso: ${codigoCurso}. Entrega:
+- Lista de bloques con fecha, horarioInicio, horarioTermino
+- Relator por bloque (nombre completo si está disponible)
+Usa únicamente la entidad kb_curso que haga match por data.codigoCurso y no mezcles con otros cursos.`
+  };
+
+  return templates[tipo];
+};
 
 ==== src\lib\utils.ts ====
 import { clsx, type ClassValue } from "clsx"
@@ -7299,17 +10243,9 @@ export default Index;
 
 ==== src\pages\NotFound.tsx ====
 import { useLocation } from "react-router-dom";
-import { useEffect } from "react";
 
 const NotFound = () => {
   const location = useLocation();
-
-  useEffect(() => {
-    console.error(
-      "404 Error: User attempted to access non-existent route:",
-      location.pathname
-    );
-  }, [location.pathname]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">

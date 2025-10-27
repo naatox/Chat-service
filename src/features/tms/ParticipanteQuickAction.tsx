@@ -1,10 +1,10 @@
 import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { UserSearch } from "lucide-react";
-import { RelatorSearchModal } from "./RelatorSearchModal";
+import { Users } from "lucide-react";
+import { ParticipanteSearchModal } from "./ParticipanteSearchModal";
 import { sendCustomTelemetry } from "@/lib/telemetry";
 
-interface RelatorQuickActionProps {
+interface ParticipanteQuickActionProps {
   onActionSend: (payload: {
     source: string;
     intent: string;
@@ -15,16 +15,16 @@ interface RelatorQuickActionProps {
   currentRole?: string;
 }
 
-export const RelatorQuickAction = ({ 
+export const ParticipanteQuickAction = ({ 
   onActionSend, 
   disabled = false,
   currentRole = ""
-}: RelatorQuickActionProps) => {
+}: ParticipanteQuickActionProps) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   const handleClick = () => {
-    // Telemetría: click en quick action relator
-    sendCustomTelemetry("tms_find_relator_click", {});
+    // Telemetría: click en quick action participante
+    sendCustomTelemetry("tms_find_participante_click", {});
     setIsModalOpen(true);
   };
 
@@ -32,8 +32,8 @@ export const RelatorQuickAction = ({
     // Construir payload exacto según especificación
     const payload = {
       source: "quick_action",
-      intent: "tms.find_relator",
-      message: "Buscar Relator",
+      intent: "tms.find_participante",
+      message: "Buscar Participante",
       target
     };
 
@@ -48,14 +48,14 @@ export const RelatorQuickAction = ({
         size="sm"
         onClick={handleClick}
         disabled={disabled}
-        className="h-auto p-3 flex items-center gap-2 bg-purple-500 hover:bg-purple-600 text-white border-none transition-all duration-200 hover:scale-105 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed rounded-md w-full"
-        title="Buscar información de relator"
+        className="h-auto p-3 flex items-center gap-2 bg-cyan-500 hover:bg-cyan-600 text-white border-none transition-all duration-200 hover:scale-105 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed rounded-md w-full"
+        title="Buscar información de participante"
       >
-        <UserSearch className="h-4 w-4 flex-shrink-0" />
-        <span className="text-xs font-medium truncate">Relator</span>
+        <Users className="h-4 w-4 flex-shrink-0" />
+        <span className="text-xs font-medium truncate">Participante</span>
       </Button>
 
-      <RelatorSearchModal
+      <ParticipanteSearchModal
         open={isModalOpen}
         onOpenChange={setIsModalOpen}
         onSearchSubmit={handleSearchSubmit}

@@ -59,11 +59,11 @@ export const CostosQuickAction = ({
         size="sm"
         onClick={handleClick}
         disabled={disabled}
-        className="flex flex-col items-center gap-1 h-16 w-16 p-2 bg-green-500 hover:bg-green-600 text-white border-green-600 hover:border-green-700 transition-all duration-200 hover:scale-105 hover:shadow-md rounded-md"
+        className="h-auto p-3 flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white border-none transition-all duration-200 hover:scale-105 hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed rounded-md w-full"
         title="Consultar costos"
       >
-        <DollarSign className="h-4 w-4" />
-        <span className="text-xs font-medium leading-tight">Costos</span>
+        <DollarSign className="h-4 w-4 flex-shrink-0" />
+        <span className="text-xs font-medium truncate">Costos</span>
       </Button>
 
       <CostosSearchModal

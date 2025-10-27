@@ -5,6 +5,8 @@ import { Copy, Check, ExternalLink } from "lucide-react";
 import capinMascot from "@/assets/capin-mascot.png";
 import { RelatorResult } from "@/features/tms/RelatorResult";
 import { CostosResult } from "@/features/tms/CostosResult";
+import { AprobadosResult } from "@/features/tms/AprobadosResult";
+import { ParticipanteResult } from "@/features/tms/ParticipanteResult";
 
 export interface Message {
   id: string;
@@ -17,9 +19,10 @@ export interface Message {
 interface ChatMessageProps {
   message: Message;
   onRelatorSelect?: (rut: string) => void;
+  onParticipanteSelect?: (rut: string) => void;
 }
 
-export const ChatMessage = ({ message, onRelatorSelect }: ChatMessageProps) => {
+export const ChatMessage = ({ message, onRelatorSelect, onParticipanteSelect }: ChatMessageProps) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -30,13 +33,29 @@ export const ChatMessage = ({ message, onRelatorSelect }: ChatMessageProps) => {
 
   const isUser = message.sender === "user";
 
+  // Detectar si el contenido del asistente incluye participantes aprobados con R23 (PRIMERO - más específico)
+  const isAprobadosContent = !isUser && (
+    /PARTICIPANTES APROBADOS/i.test(message.text) ||
+    (message.text.includes("participante(s) aprobado(s)") && /R23/i.test(message.text)) ||
+    (/participante.*aprobado/i.test(message.text) && /R23/i.test(message.text))
+  );
+
   // Detectar si el contenido del asistente incluye información de relatores
   const isRelatorContent = !isUser && (
     message.text.includes("Relator encontrado") ||
     message.text.includes("Relatores encontrados") ||
-    message.text.includes("múltiples coincidencias") ||
-    message.text.includes("Encontré varias coincidencias") ||
-    /\d{1,2}\.\d{3}\.\d{3}[-.][\dKk]/.test(message.text) // Detectar RUTs en el contenido
+    (message.text.includes("múltiples coincidencias") && message.text.toLowerCase().includes("relator")) ||
+    (message.text.includes("Encontré varias coincidencias") && message.text.toLowerCase().includes("relator"))
+  );
+
+  // Detectar si el contenido del asistente incluye información de participantes (EXCLUIR aprobados)
+  const isParticipanteContent = !isUser && !isAprobadosContent && (
+    message.text.includes("Participante encontrado") ||
+    (message.text.includes("Participantes encontrados") && !message.text.includes("APROBADOS")) ||
+    /Se encontraron \d+ participante/i.test(message.text) ||
+    (message.text.includes("coinciden con") && message.text.toLowerCase().includes("participante")) ||
+    (message.text.includes("múltiples coincidencias") && message.text.toLowerCase().includes("participante") && !message.text.toLowerCase().includes("aprobado")) ||
+    (message.text.includes("Encontré varias coincidencias") && message.text.toLowerCase().includes("participante") && !message.text.toLowerCase().includes("aprobado"))
   );
 
   // Detectar si el contenido del asistente incluye información de costos
@@ -48,6 +67,60 @@ export const ChatMessage = ({ message, onRelatorSelect }: ChatMessageProps) => {
     message.text.includes("===") ||
     message.text.includes("Costos by codigoComer")
   );
+
+  // Si es contenido de participantes aprobados, usar AprobadosResult (PRIMERO porque es más específico)
+  if (isAprobadosContent) {
+    return (
+      <div className={`flex gap-2 sm:gap-3 p-2 sm:p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-7 h-7 sm:w-8 sm:h-8 border-2 border-primary/20 flex-shrink-0">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[85%] sm:max-w-[80%] md:max-w-[75%] text-left min-w-0">
+          <div className="inline-block w-full p-2 sm:p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <AprobadosResult content={message.text} onParticipanteSelect={onParticipanteSelect} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Si es contenido de participantes, usar ParticipanteResult
+  if (isParticipanteContent && onParticipanteSelect) {
+    return (
+      <div className={`flex gap-3 p-4 animate-fade-in ${isUser ? "flex-row-reverse" : "flex-row"}`}>
+        <Avatar className="w-8 h-8 border-2 border-primary/20">
+          <AvatarImage src={capinMascot} alt="Capin" />
+          <AvatarFallback className="bg-primary text-primary-foreground text-xs">C</AvatarFallback>
+        </Avatar>
+
+        <div className="max-w-[80%] text-left">
+          <div className="inline-block p-3 rounded-2xl shadow-bubble transition-all duration-300 hover:shadow-lg bg-chat-assistant-bg text-chat-assistant-text border-2 border-chat-assistant-border rounded-bl-md">
+            <ParticipanteResult content={message.text} onParticipanteSelect={onParticipanteSelect} />
+          </div>
+
+          <div className="flex items-center gap-2 mt-1 justify-start">
+            <span className="text-xs text-muted-foreground">
+              {message.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+            <Button variant="ghost" size="sm" onClick={handleCopy} className="h-6 w-6 p-0 hover:bg-muted">
+              {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Si es contenido de relatores, usar RelatorResult
   if (isRelatorContent && onRelatorSelect) {

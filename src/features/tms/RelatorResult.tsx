@@ -7,6 +7,30 @@ interface RelatorResultProps {
   onRelatorSelect?: (rut: string) => void;
 }
 
+// Función para convertir URLs en enlaces clicables
+const linkifyText = (text: string): React.ReactNode => {
+  // Regex para detectar URLs (http, https)
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  
+  return parts.map((part, index) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={index}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800 underline"
+        >
+          {part}
+        </a>
+      );
+    }
+    return part;
+  });
+};
+
 export const RelatorResult = ({ content, onRelatorSelect }: RelatorResultProps) => {
   // Detectar si la respuesta contiene listado de múltiples coincidencias
   const isMultipleResults = content.includes("Encontré varias coincidencias") || 
@@ -33,9 +57,17 @@ export const RelatorResult = ({ content, onRelatorSelect }: RelatorResultProps) 
                   content.match(/^ID:\s*(\d+)/im); // ID: al inicio de línea como último recurso
   const relatorId = idMatch ? idMatch[1] : null;
 
+  // Procesar el contenido línea por línea para mantener saltos de línea
+  const contentLines = content.split('\n').map((line, lineIndex) => (
+    <React.Fragment key={lineIndex}>
+      {linkifyText(line)}
+      {lineIndex < content.split('\n').length - 1 && <br />}
+    </React.Fragment>
+  ));
+
   return (
     <div className="space-y-2">
-      <div className="text-sm text-gray-600 whitespace-pre-wrap">{content}</div>
+      <div className="text-sm text-gray-600">{contentLines}</div>
       {relatorId && (
         <Button
           variant="outline"

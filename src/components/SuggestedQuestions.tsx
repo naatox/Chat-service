@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Accordion,
@@ -5,12 +6,27 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { MaterialCursoModal } from "./MaterialCursoModal";
+import { DiplomaModal } from "./DiplomaModal";
+import { BookOpen, Calendar, FileText, GraduationCap, Package, ListChecks, Award } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+type QuestionItem = {
+  label: string;
+  prompt: string;
+  isModal?: boolean;
+  isIntent?: boolean;
+  intent?: string;
+  icon?: LucideIcon;
+};
 
 type Props = {
   onAsk: (display: string, actual?: string) => void;
   role?: string;
   isMobile?: boolean;
   disabled?: boolean;
+  onDiplomaRequest?: (rut: string) => void;
+  onClienteIntentRequest?: (intent: string, label: string) => void;
 };
 
 const alumnoQuestions = [
@@ -38,54 +54,68 @@ No agregues encabezados, ni texto extra; solo el listado numerado de cursos.`,
   },
 ];
 
-const relatorQuestions = [
+const relatorQuestions: QuestionItem[] = [
   {
     label: "Mis cursos dictados",
     prompt:
       "Muéstrame los cursos que estoy dictando actualmente como relator. Lista cada curso con sus detalles básicos.",
+    icon: BookOpen,
   },
   {
     label: "Mi agenda próxima",
     prompt:
       "Muéstrame mi agenda próxima como relator, incluyendo fechas y horarios de mis clases programadas. En caso de no existir, indícalo claramente.",
+    icon: Calendar,
   },
   {
     label: "Cursos realizados en este año",
     prompt:
       "Muéstrame todos los cursos que he dictado en este año como relator, organizados por fecha. Si no existen cursos este año, indícalo claramente.",
+    icon: GraduationCap,
   },
-
+  {
+    label: "Recurso de aprendizaje",
+    prompt: "__MODAL_MATERIAL__",
+    isModal: true,
+    icon: BookOpen,
+  },
 ];
 
-const clienteQuestions = [
-  {
-    label: "Cursos inscritos",
-    prompt:
-      "Muéstrame todos mis cursos activos y pasados como cliente (página 1). Devuelve solo la página solicitada y adjunta meta de paginación.",
-  },
+const clienteQuestions: QuestionItem[] = [
   {
     label: "Mis cursos",
-    prompt:
-      "Muéstrame todos mis cursos (comercializaciones) activos y pasados como cliente. Lista cada curso con: los nombres de los cursos con valor final en CLP, fechas (inicio y término con formato [día] de [mes] del [año]).",
-  },
-  {
-    label: "Estado de pagos",
-    prompt:
-      "Muéstrame el estado comercial, indicado dentro de data antes de los contactos. En caso de que el estado sea distinto a Sin deudas: indícame por cada curso, solamente el nombre y el estado de pago de cada uno. Si hay pagos pendientes, indícalo claramente.",
-  },
-  {
-    label: "Certificados disponibles",
-    prompt:
-      "Muéstrame los certificados que puedo descargar de los cursos completados. Lista por curso finalizado.",
+    prompt: "__INTENT_cliente.get_mis_cursos__",
+    isIntent: true,
+    intent: "cliente.get_mis_cursos",
+    icon: ListChecks,
   },
   {
     label: "Próximos cursos",
-    prompt:
-      "Muéstrame los próximos cursos disponibles que puedo inscribir según mi perfil de cliente.",
+    prompt: "__INTENT_cliente.get_proximos_cursos__",
+    isIntent: true,
+    intent: "cliente.get_proximos_cursos",
+    icon: Calendar,
+  },
+  {
+    label: "Diploma",
+    prompt: "__MODAL_DIPLOMA__",
+    isModal: true,
+    intent: "cliente.get_diploma",
+    icon: Award,
   },
 ];
 
-export const SuggestedQuestions = ({ onAsk, role, isMobile = false, disabled = false }: Props) => {
+export const SuggestedQuestions = ({ 
+  onAsk, 
+  role, 
+  isMobile = false, 
+  disabled = false, 
+  onDiplomaRequest,
+  onClienteIntentRequest 
+}: Props) => {
+  const [isMaterialModalOpen, setIsMaterialModalOpen] = useState(false);
+  const [isDiplomaModalOpen, setIsDiplomaModalOpen] = useState(false);
+
   if (role !== "alumno" && role !== "relator" && role !== "cliente") return null;
 
   let questions;
@@ -102,34 +132,84 @@ export const SuggestedQuestions = ({ onAsk, role, isMobile = false, disabled = f
     titleText = "Consultas de cliente";
   }
 
+  const handleQuestionClick = (q: QuestionItem) => {
+    // Si es el botón de Material para relator, abrir modal
+    if (q.isModal && q.prompt === "__MODAL_MATERIAL__") {
+      setIsMaterialModalOpen(true);
+    } else if (q.isModal && q.prompt === "__MODAL_DIPLOMA__") {
+      // Si es el botón de Diploma para cliente, abrir modal
+      setIsDiplomaModalOpen(true);
+    } else if (q.isIntent && q.intent && onClienteIntentRequest) {
+      // Si es un intent de cliente, llamar al handler específico
+      onClienteIntentRequest(q.intent, q.label);
+    } else {
+      onAsk(q.label, q.prompt);
+    }
+  };
+
+  const handleMaterialConfirm = (codigoCurso: string) => {
+    const message = `Necesito el material del curso ${codigoCurso}`;
+    onAsk(message, message);
+  };
+
+  const handleDiplomaConfirm = (rut: string) => {
+    if (onDiplomaRequest) {
+      onDiplomaRequest(rut);
+    }
+  };
+
   return (
-    <div className="border-b bg-background/70">
-      <Accordion type="single" collapsible defaultValue={isMobile ? undefined : "sug"}>
-        <AccordionItem value="sug" className="border-b-0">
-          <AccordionTrigger 
-            className="px-4 pt-3 pb-2 text-xs text-muted-foreground hover:no-underline"
-            aria-label={`Mostrar/ocultar ${titleText.toLowerCase()}`}
-          >
-            {titleText}
-          </AccordionTrigger>
-          <AccordionContent className="px-4 pb-2 pt-0">
-            <div className="flex flex-wrap gap-2">
-              {questions.map((q) => (
-                <Button
-                  key={q.label}
-                  variant="outline"
-                  size="sm"
-                  onClick={() => onAsk(q.label, q.prompt)}
-                  disabled={disabled}
-                  className="rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {q.label}
-                </Button>
-              ))}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-    </div>
+    <>
+      <div className="border-b bg-background/70">
+        <Accordion type="single" collapsible defaultValue={isMobile ? undefined : "sug"}>
+          <AccordionItem value="sug" className="border-b-0">
+            <AccordionTrigger 
+              className="px-4 pt-3 pb-2 text-xs text-muted-foreground hover:no-underline"
+              aria-label={`Mostrar/ocultar ${titleText.toLowerCase()}`}
+            >
+              {titleText}
+            </AccordionTrigger>
+            <AccordionContent className="px-4 pb-2 pt-0">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {questions.map((q: QuestionItem) => {
+                  const Icon = q.icon;
+                  return (
+                    <Button
+                      key={q.label}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleQuestionClick(q)}
+                      disabled={disabled}
+                      className="rounded-full disabled:opacity-50 disabled:cursor-not-allowed justify-start gap-2 w-full"
+                    >
+                      {Icon && <Icon className="h-4 w-4 flex-shrink-0" />}
+                      <span className="truncate">{q.label}</span>
+                    </Button>
+                  );
+                })}
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        </Accordion>
+      </div>
+
+      {/* Modal de Material solo para relator */}
+      {role === "relator" && (
+        <MaterialCursoModal
+          isOpen={isMaterialModalOpen}
+          onClose={() => setIsMaterialModalOpen(false)}
+          onConfirm={handleMaterialConfirm}
+        />
+      )}
+
+      {/* Modal de Diploma solo para cliente */}
+      {role === "cliente" && (
+        <DiplomaModal
+          isOpen={isDiplomaModalOpen}
+          onClose={() => setIsDiplomaModalOpen(false)}
+          onSubmit={handleDiplomaConfirm}
+        />
+      )}
+    </>
   );
 };

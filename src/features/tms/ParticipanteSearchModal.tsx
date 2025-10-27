@@ -13,17 +13,17 @@ import { Label } from "@/components/ui/label";
 import { Search, User, Hash } from "lucide-react";
 import { sendCustomTelemetry } from "@/lib/telemetry";
 
-interface RelatorSearchModalProps {
+interface ParticipanteSearchModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSearchSubmit: (searchData: { rut?: string; nombre?: string }) => void;
 }
 
-export const RelatorSearchModal = ({
+export const ParticipanteSearchModal = ({
   open,
   onOpenChange,
   onSearchSubmit,
-}: RelatorSearchModalProps) => {
+}: ParticipanteSearchModalProps) => {
   const [rutValue, setRutValue] = useState("");
   const [nombreValue, setNombreValue] = useState("");
   const [activeTab, setActiveTab] = useState("rut");
@@ -32,10 +32,9 @@ export const RelatorSearchModal = ({
     e.preventDefault();
     if (rutValue.trim()) {
       // Telemetría para búsqueda por RUT
-      sendCustomTelemetry("tms_find_relator_click", { method: "rut" });
+      sendCustomTelemetry("tms_find_participante_click", { method: "rut" });
 
       // Enviar RUT formateado con puntos y guión (formato: 8.280.801-9)
-      // El formatRut ya aplicó el formato correcto al input
       onSearchSubmit({ rut: rutValue.trim() });
       setRutValue("");
     }
@@ -45,7 +44,7 @@ export const RelatorSearchModal = ({
     e.preventDefault();
     if (nombreValue.trim()) {
       // Telemetría para búsqueda por nombre
-      sendCustomTelemetry("tms_find_relator_click", { method: "nombre" });
+      sendCustomTelemetry("tms_find_participante_click", { method: "nombre" });
 
       onSearchSubmit({ nombre: nombreValue.trim() });
       setNombreValue("");
@@ -93,10 +92,10 @@ export const RelatorSearchModal = ({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Search className="w-5 h-5" />
-            Buscar Relator
+            Buscar Participante
           </DialogTitle>
           <DialogDescription>
-            Busca información de un relator por RUT o por nombre.
+            Busca información de un participante por RUT o por nombre.
           </DialogDescription>
         </DialogHeader>
 
@@ -115,17 +114,17 @@ export const RelatorSearchModal = ({
           <TabsContent value="rut" className="space-y-4">
             <form onSubmit={handleRutSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="rut">RUT del relator</Label>
+                <Label htmlFor="rut">RUT del Participante</Label>
                 <Input
                   id="rut"
-                  type="text"
-                  placeholder="Ej: 12345678-9"
+                  placeholder="Ej: 12.345.678-9"
                   value={rutValue}
                   onChange={handleRutChange}
                   maxLength={12}
+                  autoComplete="off"
                 />
-                <p className="text-sm text-muted-foreground">
-                  Ingresa el RUT con o sin puntos y guión
+                <p className="text-xs text-muted-foreground">
+                  Ingresa el RUT con formato: 12.345.678-9
                 </p>
               </div>
               <Button
@@ -142,22 +141,22 @@ export const RelatorSearchModal = ({
           <TabsContent value="nombre" className="space-y-4">
             <form onSubmit={handleNombreSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="nombre">Nombre del relator</Label>
+                <Label htmlFor="nombre">Nombre del Participante</Label>
                 <Input
                   id="nombre"
-                  type="text"
                   placeholder="Ej: Juan Pérez"
                   value={nombreValue}
                   onChange={(e) => setNombreValue(e.target.value)}
+                  autoComplete="off"
                 />
-                <p className="text-sm text-muted-foreground">
-                  Ingresa el nombre completo o parcial
+                <p className="text-xs text-muted-foreground">
+                  Ingresa el nombre completo o parte del nombre
                 </p>
               </div>
               <Button
                 type="submit"
                 className="w-full"
-                disabled={nombreValue.trim().length < 2}
+                disabled={nombreValue.trim().length < 3}
               >
                 <Search className="w-4 h-4 mr-2" />
                 Buscar por Nombre
